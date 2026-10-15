@@ -41,6 +41,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
+const RequiredAccountSetup = "RequiredAccountSetup"
+
 func codeToResponse(code *object.Code) *Response {
 	if code.Code == "" {
 		return &Response{Status: "error", Msg: code.Message, Data: code.Code}
@@ -166,6 +168,12 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 		// by reading the credential from the response of this API directly
 		c.SetSessionUsername(userId)
 		resp = &Response{Status: "ok", Msg: "", Data: object.RequiredUpdatePassword, Data3: true}
+	} else if form.Type == ResponseTypeCode && application.NeedsRequiredAccountSetup(user) {
+		// Required account setup must finish before an OAuth code is minted.
+		// Otherwise the first token would contain stale username/phone claims and
+		// the pre-setup code could still be exchanged after the setup completes.
+		c.SetSessionUsername(userId)
+		resp = &Response{Status: "ok", Msg: "", Data: RequiredAccountSetup}
 	} else if form.Type == ResponseTypeLogin {
 		c.SetSessionUsername(userId)
 		util.LogInfo(c.Ctx, "API: [%s] signed in", userId)

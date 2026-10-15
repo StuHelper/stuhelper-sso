@@ -26,6 +26,13 @@ import (
 
 var Enforcer *casbin.Enforcer
 
+func isRequiredUsernameSelfServiceAllowed(user *object.User, method string, urlPath string) bool {
+	return user != nil &&
+		!user.IsDeleted &&
+		method == "POST" &&
+		urlPath == "/api/update-required-username"
+}
+
 func InitApi() {
 	e, err := object.GetInitializedEnforcer(util.GetId("built-in", "api-enforcer-built-in"))
 	if err != nil {
@@ -182,6 +189,10 @@ func IsAllowed(subOwner string, subName string, method string, urlPath string, o
 	if user != nil {
 		if user.IsDeleted {
 			return false, nil
+		}
+
+		if isRequiredUsernameSelfServiceAllowed(user, method, urlPath) {
+			return true, nil
 		}
 
 		if user.IsGlobalAdmin() {

@@ -1488,7 +1488,7 @@ func userChangeTrigger(owner string, oldName string, newName string) error {
 			if err != nil {
 				return err
 			}
-			if roleName == oldName {
+			if roleOwner == owner && roleName == oldName {
 				role.Users[j] = util.GetId(roleOwner, newName)
 			}
 		}
@@ -1514,7 +1514,7 @@ func userChangeTrigger(owner string, oldName string, newName string) error {
 			if err != nil {
 				return err
 			}
-			if permName == oldName {
+			if permOwner == owner && permName == oldName {
 				permission.Users[j] = util.GetId(permOwner, newName)
 			}
 		}
@@ -1524,7 +1524,7 @@ func userChangeTrigger(owner string, oldName string, newName string) error {
 		}
 	}
 
-	_, err = session.Where(fmt.Sprintf("%s = ?", quoteColumn("user")), oldName).Cols("user").Update(&Resource{User: newName})
+	_, err = session.Where(fmt.Sprintf("owner = ? AND %s = ?", quoteColumn("user")), owner, oldName).Cols("user").Update(&Resource{User: newName})
 	if err != nil {
 		return err
 	}

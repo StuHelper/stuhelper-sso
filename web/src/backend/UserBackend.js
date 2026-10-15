@@ -58,6 +58,22 @@ export function updateUser(owner, name, user) {
   }).then(res => res.json());
 }
 
+export function updateUserForColumns(owner, name, fields, columns) {
+  const query = new URLSearchParams({
+    id: `${owner}/${name}`,
+    columns: columns.join(","),
+  });
+  return fetch(`${Setting.ServerUrl}/api/update-user?${query.toString()}`, {
+    method: "POST",
+    credentials: "include",
+    body: JSON.stringify(fields),
+    headers: {
+      "Content-Type": "application/json",
+      "Accept-Language": Setting.getAcceptLanguage(),
+    },
+  }).then(res => res.json());
+}
+
 export function addUser(user) {
   const newUser = Setting.deepCopy(user);
   return fetch(`${Setting.ServerUrl}/api/add-user`, {

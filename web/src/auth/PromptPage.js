@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import React from "react";
-import {Button, Card, Col, Result, Row} from "antd";
+import {Alert, Button, Card, Col, Input, Result, Row} from "antd";
 import * as ApplicationBackend from "../backend/ApplicationBackend";
 import * as UserBackend from "../backend/UserBackend";
 import * as Setting from "../Setting";
@@ -23,6 +23,9 @@ import OAuthWidget from "../common/OAuthWidget";
 import RegionSelect from "../common/select/RegionSelect";
 import {withRouter} from "react-router-dom";
 import * as AuthBackend from "./AuthBackend";
+import ResetModal from "../common/modal/ResetModal";
+
+const stuHelperUsernameRegex = "^[A-Za-z][A-Za-z0-9]{4,19}$";
 
 class PromptPage extends React.Component {
   constructor(props) {
@@ -36,6 +39,8 @@ class PromptPage extends React.Component {
       steps: null,
       current: 0,
       finished: false,
+      requiredUsername: "",
+      usernameLoading: false,
     };
   }
 
@@ -157,6 +162,64 @@ class PromptPage extends React.Component {
           {
             (application === null || this.state.user === null) ? null : (
               application?.signupItems?.filter(signupItem => Setting.isSignupItemPrompted(signupItem)).map((signupItem, index) => {
+                if (signupItem.name === "Phone") {
+                  if (Setting.isSignupItemAnswered(this.state.user, signupItem)) {
+                    return null;
+                  }
+                  return (
+                    <div key={signupItem.name} style={{marginTop: "20px"}}>
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message={i18next.t("application:Phone binding required")}
+                        description={i18next.t("application:Bind and verify a phone before continuing")}
+                      />
+                      <div style={{display: "flex", justifyContent: "center", marginTop: "16px"}}>
+                        <ResetModal
+                          application={application}
+                          countryCode={this.state.user.countryCode ?? ""}
+                          buttonText={i18next.t("application:Bind and verify phone")}
+                          destType="phone"
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+                if (signupItem.name === "Username") {
+                  if (Setting.isSignupItemAnswered(this.state.user, signupItem)) {
+                    return null;
+                  }
+                  return (
+                    <div key={signupItem.name} style={{marginTop: "20px"}}>
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message={i18next.t("application:Username update required")}
+                        description={i18next.t(
+                          signupItem.regex === stuHelperUsernameRegex
+                            ? "application:Username must follow the StuHelper rule and can be changed once"
+                            : "application:Username can be changed once and is immutable afterwards"
+                        )}
+                      />
+                      <Input
+                        style={{marginTop: "16px"}}
+                        value={this.state.requiredUsername}
+                        placeholder={signupItem.placeholder || signupItem.label}
+                        onChange={(event) => this.setState({requiredUsername: event.target.value})}
+                      />
+                      <Button
+                        block
+                        type="primary"
+                        loading={this.state.usernameLoading}
+                        disabled={this.state.requiredUsername.trim() === ""}
+                        style={{marginTop: "12px"}}
+                        onClick={() => this.updateRequiredUsername(application)}
+                      >
+                        {i18next.t("application:Update username")}
+                      </Button>
+                    </div>
+                  );
+                }
                 if (signupItem.name !== "Country/Region") {
                   return null;
                 }
@@ -202,6 +265,35 @@ class PromptPage extends React.Component {
     return `${redirectUri}?code=${code}&state=${state}`;
   }
 
+  getRequiredSetupSigninUrl() {
+    const signInUrl = sessionStorage.getItem("signinUrl");
+    if (!signInUrl) {
+      return "";
+    }
+    sessionStorage.removeItem("signinUrl");
+    const url = new URL(signInUrl, window.location.origin);
+    url.searchParams.set("silentSignin", "1");
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  updateRequiredUsername(application) {
+    this.setState({usernameLoading: true});
+    AuthBackend.updateRequiredUsername(application.owner, application.name, this.state.requiredUsername.trim())
+      .then((res) => {
+        if (res.status === "ok") {
+          Setting.showMessage("success", i18next.t("application:Username updated"));
+          window.location.reload();
+        } else {
+          Setting.showMessage("error", res.msg);
+          this.setState({usernameLoading: false});
+        }
+      })
+      .catch((error) => {
+        Setting.showMessage("error", `${i18next.t("general:Failed to connect to server")}: ${error}`);
+        this.setState({usernameLoading: false});
+      });
+  }
+
   logout() {
     AuthBackend.logout()
       .then((res) => {
@@ -217,7 +309,8 @@ class PromptPage extends React.Component {
     this.setState({
       finished: true,
     }, () => {
-      const redirectUrl = this.getRedirectUrl();
+      const params = new URLSearchParams(this.props.location.search);
+      const redirectUrl = params.get("required") === "1" ? this.getRequiredSetupSigninUrl() : this.getRedirectUrl();
       if (redirectUrl !== "" && redirectUrl !== null) {
         Setting.goToLink(redirectUrl);
       } else {
@@ -266,7 +359,7 @@ class PromptPage extends React.Component {
     const steps = [];
     if (Setting.hasPromptPage(application)) {
       steps.push({
-        content: this.renderPromptProvider(application),
+        content: () => this.renderPromptProvider(application),
         name: "provider",
         title: i18next.t("application:Binding providers"),
       });
@@ -286,7 +379,7 @@ class PromptPage extends React.Component {
       <Card style={{marginTop: "20px", marginBottom: "20px"}}
         title={this.state.steps[this.state.current].title}
       >
-        <div >{this.state.steps[this.state.current].content}</div>
+        <div >{this.state.steps[this.state.current].content()}</div>
       </Card>
     );
   }

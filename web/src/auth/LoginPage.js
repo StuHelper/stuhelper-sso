@@ -368,6 +368,25 @@ class LoginPage extends React.Component {
       return;
     }
 
+    if (resp.data === "RequiredAccountSetup") {
+      sessionStorage.setItem("signinUrl", window.location.pathname + window.location.search);
+      AuthBackend.getAccount()
+        .then((res) => {
+          if (res.status === "ok") {
+            const account = res.data;
+            account.organization = res.data2;
+            this.onUpdateAccount(account);
+            Setting.goToLinkSoft(ths, `/prompt/${application.name}?required=1`);
+          } else {
+            Setting.showMessage("error", `${i18next.t("application:Failed to sign in")}: ${res.msg}`);
+          }
+        })
+        .catch((err) => {
+          Setting.showMessage("error", `${i18next.t("application:Failed to sign in")}: ${err}`);
+        });
+      return;
+    }
+
     // Check if consent is required
     if (resp.data?.required === true) {
       AuthBackend.getAccount()

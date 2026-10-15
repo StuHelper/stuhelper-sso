@@ -14,6 +14,12 @@
 
 package object
 
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
+
 func (application *Application) GetProviderByCategory(category string) (*Provider, error) {
 	providers, err := GetProviders(application.Organization)
 	if err != nil {
@@ -133,6 +139,58 @@ func (application *Application) GetSignupItemRule(itemName string) string {
 	}
 
 	return signupItem.Rule
+}
+
+func (application *Application) IsSignupItemValueValid(itemName string, value string) (bool, error) {
+	signupItem := application.getSignupItem(itemName)
+	if signupItem == nil {
+		return false, fmt.Errorf("signup item %q is not configured", itemName)
+	}
+
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, nil
+	}
+	if signupItem.Regex == "" {
+		return true, nil
+	}
+
+	re, err := regexp.Compile(signupItem.Regex)
+	if err != nil {
+		return false, fmt.Errorf("invalid signup item regex for %q: %w", itemName, err)
+	}
+	return re.MatchString(value), nil
+}
+
+// IsRequiredUsernameChange reports whether the current account is eligible for
+// the one-time legacy username repair. A successful repair makes the username
+// match the application rule, so the same account cannot use the flow again.
+func (application *Application) IsRequiredUsernameChange(user *User) bool {
+	if user == nil {
+		return false
+	}
+	signupItem := application.getSignupItem("Username")
+	if signupItem == nil || !signupItem.isSignupItemPrompted() {
+		return false
+	}
+
+	valid, err := application.IsSignupItemValueValid("Username", user.Name)
+	return err != nil || !valid
+}
+
+// NeedsRequiredAccountSetup is deliberately narrower than HasPromptPage. It is
+// used before an OAuth code is issued so a code cannot be minted with a missing
+// verified phone or a legacy username that still requires its one-time repair.
+func (application *Application) NeedsRequiredAccountSetup(user *User) bool {
+	if application == nil || !application.EnableSignUp || user == nil {
+		return false
+	}
+
+	phoneItem := application.getSignupItem("Phone")
+	if phoneItem != nil && phoneItem.isSignupItemPrompted() && strings.TrimSpace(user.Phone) == "" {
+		return true
+	}
+	return application.IsRequiredUsernameChange(user)
 }
 
 func (application *Application) getAllPromptedProviderItems() []*ProviderItem {

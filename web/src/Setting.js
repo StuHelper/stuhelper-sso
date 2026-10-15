@@ -892,7 +892,7 @@ export function hasPromptPage(application) {
   }
 
   const signupItems = getAllPromptedSignupItems(application);
-  if (signupItems?.filter(item => item.name === "Country/Region").length > 0) {
+  if (signupItems?.filter(item => ["Country/Region", "Phone", "Username"].includes(item.name)).length > 0) {
     return true;
   }
 
@@ -920,17 +920,35 @@ function isProviderItemAnswered(user, application, providerItem) {
   return linkedValue !== undefined && linkedValue !== "";
 }
 
-function isSignupItemAnswered(user, signupItem) {
+export function isSignupItemAnswered(user, signupItem) {
   if (user === null) {
     return false;
   }
 
-  if (signupItem.name !== "Country/Region") {
-    return true;
+  if (signupItem.name === "Phone") {
+    return typeof user.phone === "string" && user.phone.trim() !== "";
   }
 
-  const value = user["region"];
-  return value !== undefined && value !== "";
+  if (signupItem.name === "Username") {
+    if (typeof user.name !== "string" || user.name.trim() === "") {
+      return false;
+    }
+    if (!signupItem.regex) {
+      return true;
+    }
+    try {
+      return new RegExp(signupItem.regex).test(user.name);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  if (signupItem.name === "Country/Region") {
+    const value = user["region"];
+    return value !== undefined && value !== "";
+  }
+
+  return true;
 }
 
 export function isPromptAnswered(user, application) {

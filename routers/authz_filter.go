@@ -120,6 +120,17 @@ func getSubject(ctx *context.Context) (string, string) {
 	return owner, name
 }
 
+func authorizationObjectFromID(path string, id string) (string, string, error) {
+	owner, name, err := util.GetOwnerAndNameFromIdWithError(id)
+	if err != nil {
+		return owner, name, err
+	}
+	if path == "/api/update-organization" {
+		return name, name, nil
+	}
+	return owner, name, nil
+}
+
 func getObject(ctx *context.Context) (string, string, error) {
 	method := ctx.Request.Method
 	path := ctx.Request.URL.Path
@@ -196,7 +207,7 @@ func getObject(ctx *context.Context) (string, string, error) {
 		// the request body while pointing the URL at a different organization's
 		// resource.
 		if id := ctx.Input.Query("id"); id != "" && (!isOwnerObjPath || strings.HasSuffix(path, "update-organization")) {
-			owner, name, err := util.GetOwnerAndNameFromIdWithError(id)
+			owner, name, err := authorizationObjectFromID(path, id)
 			if err == nil {
 				return owner, name, nil
 			}

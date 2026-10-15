@@ -25,6 +25,18 @@ export function getAccount(query = "") {
   }).then(res => res.json());
 }
 
+export function updateRequiredUsername(applicationOwner, applicationName, username) {
+  return fetch(`${authConfig.serverUrl}/api/update-required-username`, {
+    method: "POST",
+    credentials: "include",
+    body: JSON.stringify({applicationOwner, applicationName, username}),
+    headers: {
+      "Content-Type": "application/json",
+      "Accept-Language": Setting.getAcceptLanguage(),
+    },
+  }).then(res => res.json());
+}
+
 export function signup(values, oAuthParams) {
   return fetch(`${authConfig.serverUrl}/api/signup${oAuthParamsToQuery(oAuthParams)}`, {
     method: "POST",

@@ -54,6 +54,7 @@ func InitAPI() {
 	web.Router("/api/logout", &controllers.ApiController{}, "GET,POST:Logout")
 	web.Router("/api/sso-logout", &controllers.ApiController{}, "GET,POST:SsoLogout")
 	web.Router("/api/get-account", &controllers.ApiController{}, "GET:GetAccount")
+	web.Router("/api/update-required-username", &controllers.ApiController{}, "POST:UpdateRequiredUsername")
 	web.Router("/api/userinfo", &controllers.ApiController{}, "GET:GetUserinfo")
 	web.Router("/api/user", &controllers.ApiController{}, "GET:GetUserinfo2")
 	web.Router("/api/unlink", &controllers.ApiController{}, "POST:Unlink")

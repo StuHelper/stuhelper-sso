@@ -17,7 +17,7 @@
 jest.mock("./Auth", () => ({authConfig: {serverUrl: ""}}));
 jest.mock("../Setting", () => ({getAcceptLanguage: () => "en"}));
 
-const {oAuthParamsToQuery} = require("./AuthBackend");
+const {oAuthParamsToQuery, updateRequiredUsername} = require("./AuthBackend");
 
 test("forwards OIDC reauthentication parameters to the login API", () => {
   const query = new URLSearchParams(oAuthParamsToQuery({
@@ -56,4 +56,24 @@ test("does not add reauthentication parameters to ordinary login requests", () =
   expect(query.has("prompt")).toBe(false);
   expect(query.has("maxAge")).toBe(false);
   expect(query.has("acrValues")).toBe(false);
+});
+
+test("submits the one-time username repair through the dedicated endpoint", async() => {
+  const originalFetch = global.fetch;
+  global.fetch = jest.fn().mockResolvedValue({json: () => Promise.resolve({status: "ok"})});
+
+  try {
+    await updateRequiredUsername("admin", "stuhelper-web", "ValidUser1");
+    expect(global.fetch).toHaveBeenCalledWith("/api/update-required-username", expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({
+        applicationOwner: "admin",
+        applicationName: "stuhelper-web",
+        username: "ValidUser1",
+      }),
+    }));
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

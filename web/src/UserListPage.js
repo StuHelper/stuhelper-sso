@@ -32,6 +32,7 @@ class UserListPage extends BaseListPage {
     this.state = {
       ...this.state,
       organization: null,
+      statusUpdating: {},
     };
   }
 
@@ -122,6 +123,38 @@ class UserListPage extends BaseListPage {
       })
       .catch(error => {
         Setting.showMessage("error", `${i18next.t("general:Failed to connect to server")}: ${error}`);
+      });
+  }
+
+  updateUserStatus(index, field, checked) {
+    const user = this.state.data[index];
+    const key = `${user.owner}/${user.name}/${field}`;
+    const fields = {[field]: checked};
+    const columns = [field];
+    if (field === "isDeleted") {
+      fields.deletedTime = checked ? moment().format() : "";
+      columns.push("deletedTime");
+    }
+
+    this.setState({statusUpdating: {...this.state.statusUpdating, [key]: true}});
+    UserBackend.updateUserForColumns(user.owner, user.name, fields, columns)
+      .then((res) => {
+        if (res.status === "ok") {
+          const data = [...this.state.data];
+          data[index] = {...data[index], ...fields};
+          Setting.showMessage("success", i18next.t("general:Successfully saved"));
+          this.setState({data});
+        } else {
+          Setting.showMessage("error", res.msg);
+        }
+      })
+      .catch(error => {
+        Setting.showMessage("error", `${i18next.t("general:Failed to connect to server")}: ${error}`);
+      })
+      .finally(() => {
+        const statusUpdating = {...this.state.statusUpdating};
+        delete statusUpdating[key];
+        this.setState({statusUpdating});
       });
   }
 
@@ -511,8 +544,17 @@ class UserListPage extends BaseListPage {
         width: "120px",
         sorter: true,
         render: (text, record, index) => {
+          const protectedUser = (record.owner === this.props.account.owner && record.name === this.props.account.name) || (record.owner === "built-in" && record.name === "admin");
+          const key = `${record.owner}/${record.name}/isForbidden`;
           return (
-            <Switch disabled checkedChildren={i18next.t("general:ON")} unCheckedChildren={i18next.t("general:OFF")} checked={text} />
+            <Switch
+              disabled={!Setting.isLocalAdminUser(this.props.account) || protectedUser}
+              loading={this.state.statusUpdating[key] === true}
+              checkedChildren={i18next.t("general:ON")}
+              unCheckedChildren={i18next.t("general:OFF")}
+              checked={text}
+              onChange={(checked) => this.updateUserStatus(index, "isForbidden", checked)}
+            />
           );
         },
       },
@@ -523,8 +565,17 @@ class UserListPage extends BaseListPage {
         width: "110px",
         sorter: true,
         render: (text, record, index) => {
+          const protectedUser = (record.owner === this.props.account.owner && record.name === this.props.account.name) || (record.owner === "built-in" && record.name === "admin");
+          const key = `${record.owner}/${record.name}/isDeleted`;
           return (
-            <Switch disabled checkedChildren={i18next.t("general:ON")} unCheckedChildren={i18next.t("general:OFF")} checked={text} />
+            <Switch
+              disabled={!Setting.isLocalAdminUser(this.props.account) || protectedUser}
+              loading={this.state.statusUpdating[key] === true}
+              checkedChildren={i18next.t("general:ON")}
+              unCheckedChildren={i18next.t("general:OFF")}
+              checked={text}
+              onChange={(checked) => this.updateUserStatus(index, "isDeleted", checked)}
+            />
           );
         },
       },
