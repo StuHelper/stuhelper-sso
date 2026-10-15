@@ -28,6 +28,21 @@ class AutomationTests(unittest.TestCase):
         self.assertTrue(automation.checks_pass([
             {'name': name, 'conclusion': 'success'} for name in automation.REQUIRED_CHECKS]))
 
+    def test_active_publication_serializes_component_revision_selection(self):
+        replies = []
+        def git(*args, **_):
+            value = '{"version":"v4.20.0"}' if args[0] == 'show' else 'a' * 40
+            return subprocess.CompletedProcess(args, 0, stdout=value, stderr='')
+        def api(path, method='GET', payload=None):
+            replies.append((path, method, payload))
+            return {'workflow_runs': [{'status': 'in_progress'}]}
+        with mock.patch.object(automation, 'git', side_effect=git), \
+             mock.patch.object(automation, 'pages', return_value=iter([])), \
+             mock.patch.object(automation, 'api', side_effect=api):
+            automation.release_current()
+        self.assertTrue(replies)
+        self.assertTrue(all(method == 'GET' for _, method, _ in replies))
+
     def test_upstream_cannot_replace_or_add_control_files(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)

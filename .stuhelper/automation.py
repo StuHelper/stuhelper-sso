@@ -42,7 +42,9 @@ def run(*args, allowed=(0,)):
 
 def git(*args, allowed=(0,)):
     return run('git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
-               '-c', 'merge.renormalize=false', *args, allowed=allowed)
+               '-c', 'merge.renormalize=false', '-c', 'core.fsmonitor=false',
+               '-c', 'filter.lfs.process=', '-c', 'filter.lfs.smudge=', '-c', 'filter.lfs.required=false',
+               *args, allowed=allowed)
 
 
 def api(path, method='GET', payload=None):
@@ -181,6 +183,9 @@ def release_current():
                       tag[0].split()[0] if tag else None)
         if target == sha and not release['draft']:
             return
+    active = api(f'repos/{REPO}/actions/workflows/release.yml/runs?per_page=100')['workflow_runs']
+    if any(run['status'] != 'completed' for run in active):
+        return
     prior = workflow_runs('release.yml', sha)
     if prior:
         latest = max(prior, key=lambda r: (r['run_number'], r['run_attempt']))
@@ -203,10 +208,11 @@ def main():
     current = json.loads(git('show', 'origin/develop:.stuhelper/upstream.json').stdout)
     latest = newest_stable(list(pages(f'repos/{UPSTREAM}/releases')))
     version = latest['tag_name']
+    git('fetch', '--no-tags', f'https://github.com/{UPSTREAM}.git', f'refs/tags/{current["version"]}')
+    if git('rev-parse', 'FETCH_HEAD^{commit}').stdout.strip() != current['commit']:
+        raise RuntimeError('The recorded upstream stable tag moved; manual investigation is required')
     git('fetch', '--no-tags', f'https://github.com/{UPSTREAM}.git', f'refs/tags/{version}')
     upstream_sha = git('rev-parse', 'FETCH_HEAD^{commit}').stdout.strip()
-    if version == current['version'] and upstream_sha != current['commit']:
-        raise RuntimeError('The recorded upstream stable tag moved; manual investigation is required')
     if stable_version(version) > stable_version(current['version']):
         branch = f'upstream/casdoor-{version}'
         pr = active_pr(branch, 'develop')

@@ -107,3 +107,22 @@ and [GO-2026-6611](https://pkg.go.dev/vuln/GO-2026-6611). The Alpine image pins
 available OpenSSL 3.5.9 packages. This does not introduce an automatic CVE release
 gate; source contracts, signed provenance, SBOM and migration proof remain the
 automatic release and deployment boundaries.
+
+## Two successful deployment generations
+
+The main deployment workflow signs a success receipt only after authentication
+reopens, public health/readback succeeds, and the database deployment ledger
+records success. Its exact workflow identity controls the public
+`deployed-current` discovery pointer. The source publisher never updates that
+pointer. The main repository must receive Actions **write access only to this
+public SSO package** to publish that proof; this repository receives no access to
+the legacy private deployment package.
+
+Scheduled retention verifies the main-signed receipt and retains the current and
+previous successfully deployed image generations, their OCI index children,
+Cosign signatures, SBOM and provenance. An unpromoted newer candidate remains
+protected until its deployment completes; it never evicts a successful rollback
+image. Cleanup deletes obsolete container package versions only. Immutable Git
+tags, release receipts and protected host database backups remain audit evidence.
+The first v4 deployment keeps the previous v3 image in the private deployment
+package; that image is not made public or copied into this package.
