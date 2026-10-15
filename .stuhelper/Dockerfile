@@ -7,6 +7,7 @@ ARG CASDOOR_UPSTREAM_VERSION
 ARG CASDOOR_COMPONENT_VERSION
 ARG CASDOOR_RELEASE_INPUT_SHA256
 ARG CASDOOR_DATABASE_MAJOR
+ARG SSO_API_POLICY_SHA256
 LABEL org.opencontainers.image.title="StuHelper SSO" \
       org.opencontainers.image.source="https://github.com/StuHelper/stuhelper-sso" \
       org.opencontainers.image.revision="${SSO_SOURCE_COMMIT}" \
@@ -14,6 +15,7 @@ LABEL org.opencontainers.image.title="StuHelper SSO" \
       io.stuhelper.sso.source-commit="${SSO_SOURCE_COMMIT}" \
       io.stuhelper.sso.database-major="${CASDOOR_DATABASE_MAJOR}" \
       io.stuhelper.sso.migration-gate="v1" \
+      io.stuhelper.sso.api-policy-sha256="${SSO_API_POLICY_SHA256}" \
       io.stuhelper.sso.rollback-policy="restore-pre-upgrade-database" \
       io.stuhelper.casdoor.upstream-source="https://github.com/casdoor/casdoor" \
       io.stuhelper.casdoor.upstream-commit="${CASDOOR_UPSTREAM_COMMIT}" \
@@ -33,6 +35,7 @@ RUN apk add --no-cache \
 USER 1000:1000
 WORKDIR /
 
+COPY --chown=casdoor:casdoor api-policy.json /stuhelper/api-policy.json
 COPY --chown=casdoor:casdoor server /server
 COPY --chown=casdoor:casdoor swagger /swagger
 COPY --chown=casdoor:casdoor conf/app.conf /conf/app.conf

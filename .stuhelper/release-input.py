@@ -35,6 +35,7 @@ inputs = {
     'toolchains': json.loads((root / '.stuhelper/toolchains.json').read_text()),
     'files': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
         'go.mod', 'go.sum', 'web/package.json', 'web/yarn.lock', '.stuhelper/Dockerfile', '.stuhelper/build.sh',
+        '.stuhelper/api-policy.py', 'authz/authz.go',
     )},
 }
 canonical = json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()

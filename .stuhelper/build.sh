@@ -9,6 +9,7 @@ output="${SSO_BUILD_OUTPUT:?SSO_BUILD_OUTPUT must be a new absolute directory ou
 [[ "$(yarn --version)" == "$(jq -r .yarn .stuhelper/toolchains.json)" ]]
 mkdir -p "${output}"
 python3 .stuhelper/release-input.py --component-version "${COMPONENT_VERSION:?}" --output "${output}/release-input.json"
+python3 .stuhelper/api-policy.py --output "${output}/api-policy.json" >"${output}/api-policy.sha256"
 export SOURCE_DATE_EPOCH
 SOURCE_DATE_EPOCH="$(jq -r .sourceDateEpoch "${output}/release-input.json")"
 export TZ=UTC

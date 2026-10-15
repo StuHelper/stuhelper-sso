@@ -57,6 +57,7 @@ jobs:
             --build-arg "CASDOOR_UPSTREAM_VERSION=$(jq -r .upstreamVersion "${metadata}")" \
             --build-arg "CASDOOR_COMPONENT_VERSION=${COMPONENT_VERSION}" \
             --build-arg "CASDOOR_DATABASE_MAJOR=$(jq -r .databaseMajor "${metadata}")" \
+            --build-arg "SSO_API_POLICY_SHA256=$(<"${SSO_BUILD_OUTPUT}/api-policy.sha256")" \
             --build-arg "CASDOOR_RELEASE_INPUT_SHA256=$(jq -r .releaseInputSHA256 "${metadata}")" \
             "${SSO_BUILD_OUTPUT}"
       - name: Generate the required SBOM

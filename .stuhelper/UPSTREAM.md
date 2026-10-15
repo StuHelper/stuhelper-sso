@@ -84,3 +84,26 @@ checks. Once the gate is released, database rollback is forbidden because new
 identity writes or external background work may have occurred; late ledger errors
 require forward reconciliation. Automatic production maintenance starts only in
 the owner-approved Beijing 03:00–05:00 window, enforced in the consumer repository.
+
+## Built-in API authorization projection
+
+Casdoor replaces `casbin_api_rule` from `authz.InitApi` on every startup. The
+image includes the exact source-derived policy at `/stuhelper/api-policy.json`,
+with its SHA-256 in `io.stuhelper.sso.api-policy-sha256`. Migration validates the
+old projection before and after old-image boot, validates the new table against
+this immutable image file, and validates the restored old projection separately.
+User identities, organization roles and administrator-owned permission/model
+tables remain exact preservation invariants. Generated row IDs are not policy.
+
+For v3.156.2 → v4.20.0, upstream removes the application-wide wildcard and the
+anonymous `run-casbin-command` / `refresh-engines` rules; it adds SAML logout,
+POST userinfo and first-admin setup routes. Existing nonempty admin credentials
+must remain unchanged and must not enter the first-admin setup state.
+
+The 2026-10-16 manual candidate audit upgraded Coraza to 3.8.1 and x/net to
+0.60.0 for the upstream advisories [GHSA-6gcq-wc29-5xf2](https://github.com/corazawaf/coraza/security/advisories/GHSA-6gcq-wc29-5xf2),
+[GHSA-6r3q-mjv7-xr8m](https://github.com/corazawaf/coraza/security/advisories/GHSA-6r3q-mjv7-xr8m),
+and [GO-2026-6611](https://pkg.go.dev/vuln/GO-2026-6611). The Alpine image pins
+available OpenSSL 3.5.9 packages. This does not introduce an automatic CVE release
+gate; source contracts, signed provenance, SBOM and migration proof remain the
+automatic release and deployment boundaries.
