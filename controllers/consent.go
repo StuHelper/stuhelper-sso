@@ -202,7 +202,7 @@ func (c *ApiController) GrantConsent() {
 	}
 
 	// Now get the OAuth code
-	code, err := object.GetOAuthCode(
+	code, err := object.GetOAuthCodeWithAuthentication(
 		userId,
 		request.ClientId,
 		request.Provider,
@@ -216,6 +216,7 @@ func (c *ApiController) GrantConsent() {
 		request.Resource,
 		c.Ctx.Request.Host,
 		c.GetAcceptLanguage(),
+		c.getOIDCAuthenticationContext(),
 	)
 	if err != nil {
 		c.ResponseError(err.Error())

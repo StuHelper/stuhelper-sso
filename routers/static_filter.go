@@ -66,6 +66,9 @@ func getWebBuildFolder() string {
 }
 
 func fastAutoSignin(ctx *context.Context) (string, error) {
+	if oidcReauthenticationRequested(ctx) {
+		return "", nil
+	}
 	userId := getSessionUser(ctx)
 	if userId == "" {
 		return "", nil
@@ -134,6 +137,34 @@ func fastAutoSignin(ctx *context.Context) (string, error) {
 	}
 	res := fmt.Sprintf("%s%scode=%s&state=%s", redirectUri, sep, code.Code, state)
 	return res, nil
+}
+
+func oidcReauthenticationRequested(ctx *context.Context) bool {
+	if ctx == nil || ctx.Input == nil {
+		return false
+	}
+	return oidcReauthenticationParameters(
+		ctx.Input.Query("prompt"),
+		ctx.Input.Query("max_age"),
+		ctx.Input.Query("acr_values"),
+	)
+}
+
+func oidcReauthenticationParameters(promptValue, maxAge, acrValues string) bool {
+	for _, prompt := range strings.Fields(promptValue) {
+		if strings.EqualFold(prompt, "login") {
+			return true
+		}
+	}
+	if strings.TrimSpace(maxAge) == "0" {
+		return true
+	}
+	for _, acr := range strings.Fields(acrValues) {
+		if strings.EqualFold(acr, "mfa") {
+			return true
+		}
+	}
+	return false
 }
 
 func StaticFilter(ctx *context.Context) {

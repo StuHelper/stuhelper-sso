@@ -42,6 +42,7 @@ import {createFormAndSubmit, goToLink} from "../Setting";
 import WeChatLoginPanel from "./WeChatLoginPanel";
 import DeviceLoginPanel from "./DeviceLoginPanel";
 import {CountryCodeSelect} from "../common/select/CountryCodeSelect";
+import {beginOAuthRedirectOnce} from "./OAuthRedirectGuard";
 const FaceRecognitionCommonModal = lazy(() => import("../common/modal/FaceRecognitionCommonModal"));
 const FaceRecognitionModal = lazy(() => import("../common/modal/FaceRecognitionModal"));
 
@@ -84,6 +85,7 @@ class LoginPage extends React.Component {
     localStorage.setItem("signinUrl", window.location.pathname + window.location.search);
 
     this.form = React.createRef();
+    this.oauthCallbackRedirectStarted = false;
     this.refreshInlineCaptcha = this.refreshInlineCaptcha.bind(this);
   }
 
@@ -395,7 +397,9 @@ class LoginPage extends React.Component {
             this.onUpdateAccount(account);
 
             if (Setting.isPromptAnswered(account, application)) {
-              Setting.goToLink(redirectUrl);
+              if (beginOAuthRedirectOnce(this)) {
+                Setting.goToLink(redirectUrl);
+              }
             } else {
               Setting.goToLinkSoft(ths, `/prompt/${application.name}?redirectUri=${oAuthParams.redirectUri}&code=${code}&state=${oAuthParams.state}`);
             }
@@ -408,6 +412,9 @@ class LoginPage extends React.Component {
         });
     } else {
       if (noRedirect === "true") {
+        if (!beginOAuthRedirectOnce(this)) {
+          return;
+        }
         window.close();
         const newWindow = window.open(redirectUrl);
         if (newWindow) {
@@ -422,6 +429,9 @@ class LoginPage extends React.Component {
         const popupType = params.get("popup_type") || "window";
         const popup = params.get("popup");
         const isIframePopup = popup === "1" && popupType === "iframe";
+        if (!beginOAuthRedirectOnce(this)) {
+          return;
+        }
         if (!isIframePopup) {
           Setting.goToLink(redirectUrl);
         }

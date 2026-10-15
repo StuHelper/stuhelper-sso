@@ -67,6 +67,12 @@ type AuthForm struct {
 	RecoveryCode      string `json:"recoveryCode"`
 	EnableMfaRemember bool   `json:"enableMfaRemember"`
 
+	// MfaVerifiedAt and MfaVerifiedMethod are server-owned authentication
+	// context. They are populated only after the MFA verifier succeeds and
+	// cannot be supplied by a login request body.
+	MfaVerifiedAt     int64  `json:"-"`
+	MfaVerifiedMethod string `json:"-"`
+
 	Plan    string `json:"plan"`
 	Pricing string `json:"pricing"`
 

@@ -99,6 +99,14 @@ module.exports = {
         fs: false,
       };
 
+      // Parallel minimizers can emit different module ordering across clean
+      // builds. The release pipeline favors deterministic output over speed.
+      for (const minimizer of webpackConfig.optimization.minimizer || []) {
+        if (minimizer.options && Object.prototype.hasOwnProperty.call(minimizer.options, "parallel")) {
+          minimizer.options.parallel = false;
+        }
+      }
+
       return webpackConfig;
     },
   },

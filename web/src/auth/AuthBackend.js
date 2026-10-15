@@ -60,9 +60,17 @@ export function oAuthParamsToQuery(oAuthParams) {
   const resourceQuery = oAuthParams.resource
     ? `&resource=${encodeURIComponent(oAuthParams.resource)}`
     : "";
+  const reauthenticationQuery = [
+    ["prompt", oAuthParams.prompt],
+    ["maxAge", oAuthParams.maxAge],
+    ["acrValues", oAuthParams.acrValues],
+  ]
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => `&${key}=${encodeURIComponent(value)}`)
+    .join("");
 
   // code
-  return `?clientId=${oAuthParams.clientId}&responseType=${oAuthParams.responseType}&redirectUri=${encodeURIComponent(oAuthParams.redirectUri)}&type=${oAuthParams.type}&scope=${oAuthParams.scope}&state=${oAuthParams.state}&nonce=${oAuthParams.nonce}&code_challenge_method=${oAuthParams.challengeMethod}&code_challenge=${oAuthParams.codeChallenge}${resourceQuery}`;
+  return `?clientId=${oAuthParams.clientId}&responseType=${oAuthParams.responseType}&redirectUri=${encodeURIComponent(oAuthParams.redirectUri)}&type=${oAuthParams.type}&scope=${oAuthParams.scope}&state=${oAuthParams.state}&nonce=${oAuthParams.nonce}&code_challenge_method=${oAuthParams.challengeMethod}&code_challenge=${oAuthParams.codeChallenge}${resourceQuery}${reauthenticationQuery}`;
 }
 
 export function getApplicationLogin(params) {

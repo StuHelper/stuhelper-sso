@@ -158,6 +158,9 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 		}
 	}
 
+	authentication := object.NewMFAAuthenticationContext(form.SigninMethod, form.MfaVerifiedMethod, form.MfaVerifiedAt)
+	c.setOIDCAuthenticationContext(authentication)
+
 	if user.NeedUpdatePassword {
 		// no credential may be issued here, otherwise the requirement could be bypassed
 		// by reading the credential from the response of this API directly
@@ -198,7 +201,7 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 		if consentRequired {
 			resp = &Response{Status: "ok", Data: map[string]bool{"required": true}}
 		} else {
-			code, err := object.GetOAuthCode(userId, clientId, form.Provider, form.SigninMethod, responseType, redirectUri, scope, state, nonce, codeChallenge, resource, c.Ctx.Request.Host, c.GetAcceptLanguage())
+			code, err := object.GetOAuthCodeWithAuthentication(userId, clientId, form.Provider, form.SigninMethod, responseType, redirectUri, scope, state, nonce, codeChallenge, resource, c.Ctx.Request.Host, c.GetAcceptLanguage(), authentication)
 			if err != nil {
 				c.ResponseError(err.Error(), nil)
 				return
@@ -454,7 +457,7 @@ func isProxyProviderType(providerType string) bool {
 	return false
 }
 
-func checkMfaEnable(c *ApiController, user *object.User, organization *object.Organization, verificationType string) bool {
+func checkMfaEnable(c *ApiController, user *object.User, organization *object.Organization, verificationType string, forceMFA bool) bool {
 	if object.IsNeedPromptMfa(organization, user) {
 		// The prompt page needs the user to be signed in
 		c.SetSessionUsername(user.GetId())
@@ -465,7 +468,7 @@ func checkMfaEnable(c *ApiController, user *object.User, organization *object.Or
 	if user.IsMfaEnabled() {
 		currentTime := util.String2Time(util.GetCurrentTime())
 		mfaRememberDeadline := util.String2Time(user.MfaRememberDeadline)
-		if user.MfaRememberDeadline != "" && mfaRememberDeadline.After(currentTime) {
+		if !forceMFA && user.MfaRememberDeadline != "" && mfaRememberDeadline.After(currentTime) {
 			return false
 		}
 		c.setMfaUserSession(user.GetId())
@@ -487,6 +490,47 @@ func checkMfaEnable(c *ApiController, user *object.User, organization *object.Or
 		}
 	}
 
+	if forceMFA {
+		c.ResponseError("Multi-factor authentication is required for this request")
+		return true
+	}
+
+	return false
+}
+
+func isOIDCMFAStepUp(c *ApiController) bool {
+	if c == nil || c.Ctx == nil {
+		return false
+	}
+	return oidcMFARequested(c.Ctx.Input.Query("acrValues"))
+}
+
+func isOIDCReauthentication(c *ApiController) bool {
+	if c == nil || c.Ctx == nil {
+		return false
+	}
+	return oidcReauthenticationParameters(
+		c.Ctx.Input.Query("prompt"),
+		c.Ctx.Input.Query("maxAge"),
+		c.Ctx.Input.Query("acrValues"),
+	)
+}
+
+func oidcReauthenticationParameters(promptValue, maxAge, acrValues string) bool {
+	for _, prompt := range strings.Fields(promptValue) {
+		if strings.EqualFold(prompt, "login") {
+			return true
+		}
+	}
+	return strings.TrimSpace(maxAge) == "0" || oidcMFARequested(acrValues)
+}
+
+func oidcMFARequested(acrValues string) bool {
+	for _, value := range strings.Fields(acrValues) {
+		if strings.EqualFold(value, "mfa") {
+			return true
+		}
+	}
 	return false
 }
 
@@ -829,7 +873,7 @@ func (c *ApiController) Login() {
 				c.ResponseError(err.Error())
 			}
 
-			if checkMfaEnable(c, user, organization, verificationType) {
+			if checkMfaEnable(c, user, organization, verificationType, isOIDCMFAStepUp(c)) {
 				return
 			}
 
@@ -972,7 +1016,7 @@ func (c *ApiController) Login() {
 					return
 				}
 
-				if checkMfaEnable(c, user, organization, verificationType) {
+				if checkMfaEnable(c, user, organization, verificationType, isOIDCMFAStepUp(c)) {
 					return
 				}
 
@@ -1237,9 +1281,11 @@ func (c *ApiController) Login() {
 					c.ResponseError(err.Error())
 					return
 				}
+				authForm.MfaVerifiedAt = time.Now().UTC().Unix()
+				authForm.MfaVerifiedMethod = authForm.MfaType
 			}
 
-			if authForm.EnableMfaRemember {
+			if authForm.EnableMfaRemember && !isOIDCMFAStepUp(c) {
 				mfaRememberInSeconds := organization.MfaRememberInHours * 3600
 				currentTime := util.String2Time(util.GetCurrentTime())
 				duration := time.Duration(mfaRememberInSeconds) * time.Second
@@ -1258,6 +1304,8 @@ func (c *ApiController) Login() {
 				c.ResponseError(err.Error())
 				return
 			}
+			authForm.MfaVerifiedAt = time.Now().UTC().Unix()
+			authForm.MfaVerifiedMethod = "recovery"
 		} else {
 			c.ResponseError("missing passcode or recovery code")
 			return
@@ -1269,6 +1317,10 @@ func (c *ApiController) Login() {
 		c.Ctx.Input.SetParam("recordUserId", user.GetId())
 	} else {
 		if c.GetSessionUsername() != "" {
+			if isOIDCReauthentication(c) {
+				c.ResponseError("Explicit reauthentication is required for this request")
+				return
+			}
 			// user already signed in to Casdoor, so let the user click the avatar button to do the quick sign-in
 			var application *object.Application
 			application, err = object.GetApplication(fmt.Sprintf("admin/%s", authForm.Application))

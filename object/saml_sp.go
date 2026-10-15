@@ -58,6 +58,9 @@ func ParseSamlResponse(samlResponse string, provider *Provider, host string) (*i
 	if err != nil {
 		return nil, err
 	}
+	if err = validateSamlAssertionWarnings(assertionInfo.WarningInfo); err != nil {
+		return nil, err
+	}
 
 	userInfoMap := make(map[string]string)
 	for spAttr, idpAttr := range provider.UserMapping {
@@ -136,6 +139,7 @@ func buildSp(provider *Provider, samlResponse string, host string) (*saml2.SAMLS
 	sp := &saml2.SAMLServiceProvider{
 		ServiceProviderIssuer:       fmt.Sprintf("%s/api/acs", origin),
 		AssertionConsumerServiceURL: fmt.Sprintf("%s/api/acs", origin),
+		AudienceURI:                 fmt.Sprintf("%s/api/acs", origin),
 		SignAuthnRequests:           false,
 		IDPCertificateStore:         &certStore,
 		SPKeyStore:                  dsig.RandomKeyStoreForTest(),
@@ -154,6 +158,19 @@ func buildSp(provider *Provider, samlResponse string, host string) (*saml2.SAMLS
 	}
 
 	return sp, nil
+}
+
+func validateSamlAssertionWarnings(warningInfo *saml2.WarningInfo) error {
+	if warningInfo == nil {
+		return fmt.Errorf("SAML assertion validation result is missing")
+	}
+	if warningInfo.InvalidTime {
+		return fmt.Errorf("SAML assertion is outside its valid time window")
+	}
+	if warningInfo.NotInAudience {
+		return fmt.Errorf("SAML assertion audience does not match this service provider")
+	}
+	return nil
 }
 
 func buildSpKeyStore() (dsig.X509KeyStore, error) {

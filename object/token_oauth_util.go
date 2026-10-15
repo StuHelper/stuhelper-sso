@@ -300,6 +300,14 @@ func CheckOAuthLogin(clientId string, responseType string, redirectUri string, s
 }
 
 func GetOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, challenge string, resource string, host string, lang string) (*Code, error) {
+	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, challenge, resource, host, lang, nil)
+}
+
+func GetOAuthCodeWithAuthentication(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
+	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, challenge, resource, host, lang, authentication)
+}
+
+func getOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
 	user, err := GetUser(userId)
 	if err != nil {
 		return nil, err
@@ -352,7 +360,7 @@ func GetOAuthCode(userId string, clientId string, provider string, signinMethod 
 	if err != nil {
 		return nil, err
 	}
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, scope, resource, host)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, scope, resource, host, authentication)
 	if err != nil {
 		return nil, err
 	}
@@ -470,6 +478,7 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 	}
 
 	var oldTokenScope string
+	var authentication *AuthenticationContext
 	if application.TokenFormat == "JWT-Standard" {
 		oldToken, err := ParseStandardJwtToken(refreshToken, cert)
 		if err != nil {
@@ -479,6 +488,7 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 			}, nil
 		}
 		oldTokenScope = oldToken.Scope
+		authentication = authenticationContextFromClaims(oldToken.AMR, oldToken.AuthTime, oldToken.ACR)
 	} else {
 		oldToken, err := ParseJwtToken(refreshToken, cert)
 		if err != nil {
@@ -488,6 +498,7 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 			}, nil
 		}
 		oldTokenScope = oldToken.Scope
+		authentication = authenticationContextFromClaims(oldToken.AMR, oldToken.AuthTime, oldToken.ACR)
 	}
 
 	if scope == "" {
@@ -515,7 +526,7 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 		return nil, err
 	}
 
-	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, resource, host)
+	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, resource, host, authentication)
 	if err != nil {
 		return &TokenError{
 			Error:            EndpointError,
@@ -699,35 +710,70 @@ func parseAndValidateSubjectToken(subjectToken string, requestingClientId string
 		return "", "", "", &TokenError{Error: EndpointError, ErrorDescription: fmt.Sprintf("cert for issuing application %s cannot be found", unverifiedClaims.Azp)}, nil
 	}
 
+	var audience []string
 	if issuingApp.TokenFormat == "JWT-Standard" {
 		standardClaims, err := ParseStandardJwtToken(subjectToken, cert)
 		if err != nil {
 			return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("invalid subject_token: %s", err.Error())}, nil
 		}
-		return standardClaims.Owner, standardClaims.Name, standardClaims.Scope, nil, nil
-	}
-
-	claims, err := ParseJwtToken(subjectToken, cert)
-	if err != nil {
-		return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("invalid subject_token: %s", err.Error())}, nil
+		owner, name, scope = standardClaims.Owner, standardClaims.Name, standardClaims.Scope
+		audience = standardClaims.Audience
+	} else {
+		claims, err := ParseJwtToken(subjectToken, cert)
+		if err != nil {
+			return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("invalid subject_token: %s", err.Error())}, nil
+		}
+		owner, name, scope = claims.Owner, claims.Name, claims.Scope
+		audience = claims.Audience
 	}
 
 	// Audience binding: requesting client must be the issuer itself or appear in token's aud.
 	// Prevents an attacker from exchanging App A's token to obtain an App B token (RFC 8693 §2.1).
-	if issuingApp.ClientId != requestingClientId {
-		audienceMatched := false
-		for _, aud := range claims.Audience {
-			if aud == requestingClientId {
-				audienceMatched = true
-				break
-			}
-		}
-		if !audienceMatched {
-			return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("subject_token audience does not include the requesting client '%s'", requestingClientId)}, nil
-		}
+	if tokenErr = validateSubjectTokenAudience(issuingApp.ClientId, requestingClientId, audience); tokenErr != nil {
+		return "", "", "", tokenErr, nil
 	}
 
-	return claims.Owner, claims.Name, claims.Scope, nil, nil
+	tokenErr, err = validateStoredSubjectToken(subjectToken, issuingApp, owner, name, GetTokenByAccessToken, time.Now())
+	if err != nil || tokenErr != nil {
+		return "", "", "", tokenErr, err
+	}
+
+	return owner, name, scope, nil, nil
+}
+
+type subjectTokenLookup func(string) (*Token, error)
+
+func validateSubjectTokenAudience(issuingClientId, requestingClientId string, audience []string) *TokenError {
+	if issuingClientId == requestingClientId || slices.Contains(audience, requestingClientId) {
+		return nil
+	}
+	return &TokenError{
+		Error:            InvalidGrant,
+		ErrorDescription: fmt.Sprintf("subject_token audience does not include the requesting client '%s'", requestingClientId),
+	}
+}
+
+func validateStoredSubjectToken(subjectToken string, issuingApp *Application, owner, name string, lookup subjectTokenLookup, now time.Time) (*TokenError, error) {
+	token, err := lookup(subjectToken)
+	if err != nil {
+		return nil, err
+	}
+
+	invalidGrant := func(description string) *TokenError {
+		return &TokenError{Error: InvalidGrant, ErrorDescription: description}
+	}
+	if token == nil {
+		return invalidGrant("subject_token is not active"), nil
+	}
+	if token.Owner != issuingApp.Owner || token.Application != issuingApp.Name || token.Organization != owner || token.User != name {
+		return invalidGrant("subject_token does not match its stored token record"), nil
+	}
+	createdAt, err := time.Parse(time.RFC3339, token.CreatedTime)
+	if err != nil || token.ExpiresIn <= 0 || !now.Before(createdAt.Add(time.Duration(token.ExpiresIn)*time.Second)) {
+		return invalidGrant("subject_token is expired or revoked"), nil
+	}
+
+	return nil, nil
 }
 
 // createGuestUserToken creates a new guest user and returns a token for them.
@@ -814,7 +860,7 @@ func createGuestUserToken(application *Application, clientSecret string, verifie
 		}, nil
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, guestUser, "", "", "", "", "", "")
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, guestUser, "", "", "", "", "", "", nil)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
