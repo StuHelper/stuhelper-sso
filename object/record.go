@@ -27,9 +27,24 @@ import (
 )
 
 var (
-	logPostOnly   bool
-	passwordRegex *regexp.Regexp
+	logPostOnly          bool
+	secretJsonRegex      *regexp.Regexp
+	secretFormRegex      *regexp.Regexp
+	secretMultipartRegex *regexp.Regexp
 )
+
+var secretRecordKeys = []string{
+	"password", "oldPassword", "newPassword", "masterPassword", "defaultPassword", "passwordSalt", "passwordObfuscatorKey",
+	"clientSecret", "client_secret", "clientSecret2", "accessSecret", "secret", "secretKey", "privateKey", "kerberosKeytab",
+	"token", "accessToken", "access_token", "refreshToken", "refresh_token", "idToken", "id_token", "registrationAccessToken",
+	"originalToken", "originalRefreshToken", "totpSecret", "masterVerificationCode",
+	"code_verifier", "passcode", "recoveryCode", "recoveryCodes", "stuHelperAuthz", "stuhelper_authz",
+}
+
+// secretRecordKeyPatterns match the per-provider OAuth tokens kept in a user's properties
+var secretRecordKeyPatterns = []string{`oauth_[^"&=]*_(?:accessToken|refreshToken)`}
+
+var secretRecordQueries = append([]string{"id_token_hint"}, secretRecordKeys...)
 
 // alwaysLoggedActions lists the actions that are always recorded, even for GET
 // requests when "logPostOnly" is enabled. These endpoints accept GET by design
@@ -51,7 +66,11 @@ var stuHelperAuthorizationBindingActions = map[string]bool{
 
 func init() {
 	logPostOnly = conf.GetConfigBool("logPostOnly")
-	passwordRegex = regexp.MustCompile("\"password\":\"([^\"]*?)\"")
+	keys := strings.Join(append(append([]string{}, secretRecordKeys...), secretRecordKeyPatterns...), "|")
+	jsonString := `"(?:[^"\\]|\\.)*"`
+	secretJsonRegex = regexp.MustCompile(`(?i)"(` + keys + `)"\s*:\s*(?:` + jsonString + `|\[(?:` + jsonString + `|[^\]"])*\])`)
+	secretFormRegex = regexp.MustCompile(`(?i)(^|&)(` + keys + `)=[^&]*`)
+	secretMultipartRegex = regexp.MustCompile(`(?i)(name="(?:` + keys + `)"\r?\n\r?\n)[^\r\n]*`)
 }
 
 type Record struct {
@@ -85,8 +104,10 @@ type Response struct {
 	Data interface{} `json:"data"`
 }
 
-func maskPassword(recordString string) string {
-	return passwordRegex.ReplaceAllString(recordString, "\"password\":\"***\"")
+func maskSecrets(recordString string) string {
+	recordString = secretJsonRegex.ReplaceAllString(recordString, `"$1":"***"`)
+	recordString = secretFormRegex.ReplaceAllString(recordString, "${1}${2}=***")
+	return secretMultipartRegex.ReplaceAllString(recordString, "${1}***")
 }
 
 func NewRecord(ctx *context.Context) (*Record, error) {
@@ -97,7 +118,7 @@ func NewRecord(ctx *context.Context) (*Record, error) {
 	}
 
 	// "id_token_hint" carries a JWT, so it is dropped instead of being persisted in the audit row.
-	requestUri := util.FilterQuery(ctx.Request.RequestURI, []string{"accessToken", "id_token_hint", "stuhelper_authz"})
+	requestUri := util.FilterQuery(ctx.Request.RequestURI, secretRecordQueries)
 	if len(requestUri) > 1000 {
 		requestUri = requestUri[0:1000]
 	}
@@ -109,7 +130,7 @@ func NewRecord(ctx *context.Context) (*Record, error) {
 		} else {
 			object = string(ctx.Input.RequestBody)
 		}
-		object = maskPassword(object)
+		object = maskSecrets(object)
 	}
 
 	respBytes, err := json.Marshal(ctx.Input.Data()["json"])
@@ -136,11 +157,7 @@ func NewRecord(ctx *context.Context) (*Record, error) {
 		dataResp = fmt.Sprintf(", data:%s", string(dataByte))
 	}
 
-	language := ctx.Request.Header.Get("Accept-Language")
-	if len(language) > 2 {
-		language = language[0:2]
-	}
-	languageCode := conf.GetLanguage(language)
+	languageCode := conf.GetAcceptLanguage(ctx.Request.Header.Get("Accept-Language"))
 
 	record := Record{
 		Name:        util.GenerateId(),
@@ -191,6 +208,31 @@ func removeStuHelperAuthorizationBinding(value any) {
 	}
 }
 
+// SetUser sets the record's organization and user from the subject's user ID. An M2M
+// credential ("app/<name>") is recorded in the application's organization, because the
+// pseudo organization "app" is shown by no organization's audit log.
+func (record *Record) SetUser(userId string) error {
+	if IsAppUser(userId) {
+		appUser, err := GetAppUser(userId)
+		if err != nil {
+			return err
+		}
+
+		if appUser != nil {
+			record.Organization, record.User = appUser.Owner, appUser.Name
+			return nil
+		}
+	}
+
+	owner, name, err := util.GetOwnerAndNameFromIdWithError(userId)
+	if err != nil {
+		return err
+	}
+
+	record.Organization, record.User = owner, name
+	return nil
+}
+
 func addRecord(record *Record) (int64, error) {
 	affected, err := ormer.Engine.Insert(record)
 	return affected, err
@@ -203,12 +245,12 @@ func AddRecord(record *Record) bool {
 		}
 	}
 
-	if record.Organization == "app" {
-		return false
+	// an empty owner matches no audit log query and no retention policy
+	if record.Organization == "" {
+		record.Organization = "built-in"
 	}
-
 	record.Owner = record.Organization
-	record.Object = maskPassword(record.Object)
+	record.Object = maskSecrets(record.Object)
 
 	errWebhook := SendWebhooks(record)
 	if errWebhook == nil {
@@ -222,6 +264,8 @@ func AddRecord(record *Record) bool {
 		panic(err)
 	}
 
+	sendAuditRecord(record)
+
 	return affected != 0
 }
 
@@ -230,9 +274,9 @@ func GetRecordCount(field, value string, filterRecord *Record) (int64, error) {
 	return session.Count(filterRecord)
 }
 
-func GetRecords() ([]*Record, error) {
+func GetRecords(organization string) ([]*Record, error) {
 	records := []*Record{}
-	err := ormer.Engine.Desc("id").Find(&records)
+	err := ormer.Engine.Desc("id").Find(&records, &Record{Organization: organization})
 	if err != nil {
 		return records, err
 	}

@@ -16,6 +16,8 @@ package object
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/casdoor/casdoor/util"
@@ -66,7 +68,7 @@ type DcrError struct {
 }
 
 // RegisterDynamicClient creates a new application based on DCR request (RFC 7591)
-func RegisterDynamicClient(req *DynamicClientRegistrationRequest, organization string, registrationClientUri string) (*DynamicClientRegistrationResponse, *DcrError, error) {
+func RegisterDynamicClient(req *DynamicClientRegistrationRequest, organization string, registrationClientUri string, lang string) (*DynamicClientRegistrationResponse, *DcrError, error) {
 	// Validate organization exists and has DCR enabled
 	org, err := GetOrganization(util.GetId("admin", organization))
 	if err != nil {
@@ -93,6 +95,9 @@ func RegisterDynamicClient(req *DynamicClientRegistrationRequest, organization s
 			Error:            "invalid_redirect_uri",
 			ErrorDescription: "redirect_uris is required and must contain at least one URI",
 		}, nil
+	}
+	if dcrErr := checkDcrClientMetadata(req); dcrErr != nil {
+		return nil, dcrErr, nil
 	}
 
 	// Set defaults
@@ -141,6 +146,8 @@ func RegisterDynamicClient(req *DynamicClientRegistrationRequest, organization s
 		inheritedEnableWebAuthn = defaultApp.EnableWebAuthn
 	}
 
+	expireInHours, refreshExpireInHours, cookieExpireInHours := getDcrTokenLifetimes(defaultApp)
+
 	// Create Application object
 	// Note: DCR applications are created under "admin" owner by default
 	// This can be made configurable in future versions
@@ -176,9 +183,10 @@ func RegisterDynamicClient(req *DynamicClientRegistrationRequest, organization s
 		EnableAutoSignin:        false,
 		EnableWebAuthn:          inheritedEnableWebAuthn,
 		TokenFormat:             org.DefaultTokenFormat,
-		ExpireInHours:           168,
-		RefreshExpireInHours:    168,
-		CookieExpireInHours:     720,
+		TokenFields:             org.DefaultTokenFields,
+		ExpireInHours:           expireInHours,
+		RefreshExpireInHours:    refreshExpireInHours,
+		CookieExpireInHours:     cookieExpireInHours,
 		FormOffset:              2,
 		Tags:                    []string{"dcr"},
 		TermsOfUse:              req.TosUri,
@@ -188,7 +196,7 @@ func RegisterDynamicClient(req *DynamicClientRegistrationRequest, organization s
 	}
 
 	// Add the application
-	affected, err := AddApplication(application)
+	affected, err := AddApplication(application, lang)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -267,6 +275,9 @@ func UpdateDynamicClient(app *Application, req *DynamicClientRegistrationRequest
 			ErrorDescription: "redirect_uris is required and must contain at least one URI",
 		}, nil
 	}
+	if dcrErr := checkDcrClientMetadata(req); dcrErr != nil {
+		return nil, dcrErr, nil
+	}
 
 	app.DisplayName = firstNonEmpty(req.ClientName, app.DisplayName)
 	app.RedirectUris = req.RedirectUris
@@ -301,4 +312,72 @@ func DeleteDynamicClient(app *Application) *DcrError {
 		return &DcrError{Error: "server_error", ErrorDescription: "failed to delete client"}
 	}
 	return nil
+}
+
+func getDcrTokenLifetimes(defaultApp *Application) (float64, float64, int64) {
+	expireInHours, refreshExpireInHours, cookieExpireInHours := 168.0, 720.0, int64(720)
+	if defaultApp == nil {
+		return expireInHours, refreshExpireInHours, cookieExpireInHours
+	}
+
+	if defaultApp.ExpireInHours > 0 {
+		expireInHours = defaultApp.ExpireInHours
+	}
+	if defaultApp.RefreshExpireInHours > 0 {
+		refreshExpireInHours = defaultApp.RefreshExpireInHours
+	}
+	if defaultApp.CookieExpireInHours > 0 {
+		cookieExpireInHours = defaultApp.CookieExpireInHours
+	}
+	return expireInHours, refreshExpireInHours, cookieExpireInHours
+}
+
+var dcrGrantTypes = []string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"}
+
+func checkDcrClientMetadata(req *DynamicClientRegistrationRequest) *DcrError {
+	for _, redirectUri := range req.RedirectUris {
+		if isScriptUrl(redirectUri) {
+			return &DcrError{
+				Error:            "invalid_redirect_uri",
+				ErrorDescription: fmt.Sprintf("the redirect URI: %s is not allowed", redirectUri),
+			}
+		}
+	}
+
+	for _, uri := range []string{req.LogoUri, req.ClientUri, req.PolicyUri, req.TosUri} {
+		if uri != "" && !isHttpUrl(uri) {
+			return &DcrError{
+				Error:            "invalid_client_metadata",
+				ErrorDescription: fmt.Sprintf("the URI: %s must be an http or https URL", uri),
+			}
+		}
+	}
+
+	grantTypes := []string{}
+	for _, grantType := range req.GrantTypes {
+		if util.InSlice(dcrGrantTypes, grantType) {
+			grantTypes = append(grantTypes, grantType)
+		}
+	}
+	req.GrantTypes = grantTypes
+	return nil
+}
+
+func isScriptUrl(rawUrl string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawUrl))
+	if err != nil {
+		return true
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	return scheme == "javascript" || scheme == "data" || scheme == "vbscript"
+}
+
+func isHttpUrl(rawUrl string) bool {
+	u, err := url.Parse(rawUrl)
+	if err != nil {
+		return false
+	}
+
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }

@@ -15,6 +15,7 @@
 package routers
 
 import (
+	"github.com/casdoor/casdoor/object"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func TestAfterRecordMessageConstructorRedactsStuHelperAuthorizationBinding(t *te
 	ctx.Reset(httptest.NewRecorder(), request)
 	ctx.Input.RequestBody = []byte(body)
 
-	record, err := newRecordForAfterRecordMessage(ctx)
+	record, err := object.NewRecord(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,19 +15,23 @@
 package object
 
 import (
-	"os"
 	"testing"
 
 	saml2 "github.com/russellhaering/gosaml2"
 )
 
 func TestBuildSpBindsAudienceToServiceProvider(t *testing.T) {
-	certificate, err := os.ReadFile("token_jwt_key.pem")
+	setupStuHelperOAuthTestDatabase(t)
+	_, err := AddCert(&Cert{Owner: "admin", Name: "cert-built-in", CryptoAlgorithm: "RS256", BitSize: 2048, ExpireInYears: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
+	cert, err := getCert("admin", "cert-built-in")
+	if err != nil || cert == nil {
+		t.Fatalf("synthetic certificate missing: %v", err)
+	}
 
-	sp, err := buildSp(&Provider{IdP: string(certificate)}, "", "sso.example.com")
+	sp, err := buildSp(&Provider{IdP: cert.Certificate}, "", "sso.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}

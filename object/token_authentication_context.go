@@ -14,7 +14,10 @@
 
 package object
 
-import "strings"
+import (
+	"github.com/golang-jwt/jwt/v5"
+	"strings"
+)
 
 const mfaAssuranceContext = "mfa"
 
@@ -108,4 +111,11 @@ func mfaAMRMethod(mfaType string) string {
 	default:
 		return ""
 	}
+}
+
+func authenticationTimeUnix(value *jwt.NumericDate) int64 {
+	if value == nil {
+		return 0
+	}
+	return value.Unix()
 }

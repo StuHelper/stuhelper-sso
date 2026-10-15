@@ -56,6 +56,24 @@
     return query;
   }
 
+  // Keep in sync with consumeLinkNonce() in src/auth/Util.ts
+  function consumeLinkNonce(nonce) {
+    var expected = sessionStorage.getItem("casdoor_link_nonce");
+    sessionStorage.removeItem("casdoor_link_nonce");
+    return !!nonce && nonce === expected;
+  }
+
+  function getParameterIgnoreCase(params, key) {
+    var target = key.toLowerCase();
+    var result = null;
+    params.forEach(function(val, name) {
+      if (result === null && name.toLowerCase() === target) {
+        result = val;
+      }
+    });
+    return result;
+  }
+
   function getInnerParams() {
     var params = new URLSearchParams(window.location.search);
     var state = params.get("state");
@@ -72,7 +90,7 @@
     if (method === "signup" || method === "signin") {
       var realRedirectUri = innerParams.get("redirect_uri");
       if (realRedirectUri === null) {
-        var samlRequest = innerParams.get("SAMLRequest");
+        var samlRequest = getParameterIgnoreCase(innerParams, "SAMLRequest");
         var casService = innerParams.get("service");
         if (samlRequest) {
           return "saml";
@@ -209,13 +227,6 @@
     var isSteam = params.get("openid.mode");
     var code = params.get("code") || params.get("auth_code") || params.get("authCode");
 
-    if (code === null) {
-      var web3AuthTokenKey = params.get("web3AuthTokenKey");
-      if (web3AuthTokenKey !== null) {
-        code = localStorage.getItem(web3AuthTokenKey);
-      }
-    }
-
     if (isSteam !== null && code === null) {
       code = window.location.search;
     }
@@ -243,6 +254,19 @@
     }
 
     return code;
+  }
+
+  // The backend answers a login that still needs the user's consent with
+  // `data: {required: true}` instead of an authorization code.
+  function isConsentRequired(res) {
+    return !!(res.data && typeof res.data === "object" && res.data.required === true);
+  }
+
+  function goToConsentPage(applicationName, queryString) {
+    var url = new URL(getReactCallbackOrigin());
+    url.pathname = "/consent/" + encodeURIComponent(applicationName);
+    url.search = queryString || "";
+    window.location.replace(url.toString());
   }
 
   function shouldFallbackToReact(res) {
@@ -280,9 +304,14 @@
     var applicationName = innerParams.get("application");
     var providerName = innerParams.get("provider");
     var method = innerParams.get("method");
-    var samlRequest = innerParams.get("SAMLRequest");
+    var samlRequest = getParameterIgnoreCase(innerParams, "SAMLRequest");
     var code = extractCallbackCode(params);
     var responseType = getResponseType(innerParams);
+    if (responseType === "link" && !consumeLinkNonce(innerParams.get("linkNonce"))) {
+      setStatus("Unauthorized", true);
+      return;
+    }
+
     var redirectUri = window.location.origin + "/callback";
     var codeVerifier = getCodeVerifier(params.get("state"));
     var body = {
@@ -345,6 +374,13 @@
     var res = await response.json();
     if (res.status !== "ok") {
       setStatus(res.msg || "Failed to sign in.", true);
+      return;
+    }
+
+    // The consent page issues the real code, so it needs the original
+    // authorization request, which is what the state carries.
+    if (isConsentRequired(res)) {
+      goToConsentPage(applicationName, queryString);
       return;
     }
 

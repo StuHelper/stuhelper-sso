@@ -43,7 +43,7 @@ func TestOIDCReauthenticationParameters(t *testing.T) {
 func TestAutoSigninRedirectPreservesOpaqueState(t *testing.T) {
 	const state = "  opaque +&=/% state  "
 	const code = "code+&=/"
-	redirect := buildOAuthCodeRedirectURL("https://rp.example/callback?existing=value", "&", code, state)
+	redirect := buildOAuthCodeRedirectURL("https://rp.example/callback?existing=value", "&", code, state, "https://sso.example")
 	parsed, err := url.Parse(redirect)
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +53,9 @@ func TestAutoSigninRedirectPreservesOpaqueState(t *testing.T) {
 	}
 	if got := parsed.Query().Get("code"); got != code {
 		t.Fatalf("code = %q, want %q", got, code)
+	}
+	if parsed.Query().Get("iss") != "https://sso.example" {
+		t.Fatal("OIDC issuer missing")
 	}
 	if got := parsed.Query().Get("existing"); got != "value" {
 		t.Fatalf("existing query = %q, want value", got)
