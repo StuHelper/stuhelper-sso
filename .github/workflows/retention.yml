@@ -1,0 +1,35 @@
+name: SSO Registry Retention
+
+on:
+  schedule:
+    - cron: '13,43 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sso-registry-retention
+  cancel-in-progress: false
+
+jobs:
+  retain:
+    if: github.repository == 'StuHelper/stuhelper-sso' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Install pinned Cosign
+        run: .stuhelper/setup-cosign.sh
+      - name: Retain current and previous successful SSO generations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .stuhelper/registry-retention.py
+          --image ghcr.io/stuhelper/stuhelper-sso --apply

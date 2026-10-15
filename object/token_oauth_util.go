@@ -21,11 +21,13 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/casdoor/casdoor/i18n"
 	"github.com/casdoor/casdoor/util"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/xorm-io/core"
 )
 
@@ -37,6 +39,7 @@ const (
 	UnauthorizedClient   = "unauthorized_client"
 	UnsupportedGrantType = "unsupported_grant_type"
 	InvalidScope         = "invalid_scope"
+	InvalidTarget        = "invalid_target"
 	EndpointError        = "endpoint_error"
 	DeviceAuthExpiresIn  = 120
 	DeviceAuthInterval   = 5
@@ -55,11 +58,92 @@ var DeviceAuthMap deviceAuthStore = &memoryDeviceAuthStore{}
 type Code struct {
 	Message string `xorm:"varchar(100)" json:"message"`
 	Code    string `xorm:"varchar(100)" json:"code"`
+	// Token holds the tokens a hybrid flow returns together with the code
+	Token *Token `xorm:"-" json:"-"`
+}
+
+// ResponseType is a parsed OAuth 2.0 / OIDC response_type: a space-separated set of
+// "code", "token" and "id_token", see https://openid.net/specs/oauth-v2-multiple-response-types-1_0.html
+type ResponseType struct {
+	Code    bool
+	Token   bool
+	IdToken bool
+}
+
+func ParseResponseType(responseType string) (ResponseType, bool) {
+	res := ResponseType{}
+	values := strings.Fields(responseType)
+	if len(values) == 0 {
+		return res, false
+	}
+
+	for _, value := range values {
+		switch value {
+		case "code":
+			if res.Code {
+				return res, false
+			}
+			res.Code = true
+		case "token":
+			if res.Token {
+				return res, false
+			}
+			res.Token = true
+		case "id_token":
+			if res.IdToken {
+				return res, false
+			}
+			res.IdToken = true
+		default:
+			return res, false
+		}
+	}
+	return res, true
+}
+
+func (rt ResponseType) IsCodeOnly() bool {
+	return rt.Code && !rt.Token && !rt.IdToken
+}
+
+// IsNonceRequired tells whether the request has to carry a nonce: OIDC requires it whenever a token
+// comes back from the authorization endpoint, i.e. for the implicit and hybrid flows
+func (rt ResponseType) IsNonceRequired(scope string) bool {
+	if !util.InSlice(strings.Fields(scope), "openid") {
+		return false
+	}
+	return rt.IdToken || (rt.Code && rt.Token)
+}
+
+// IsSessionAuthFresh tells whether signing in with an existing session satisfies the prompt and
+// max_age parameters of an authorization request: prompt=login and a max_age older than the time the
+// user entered credentials (authTime, 0 if unknown) require entering them again
+func IsSessionAuthFresh(prompt string, maxAge string, authTime int64) bool {
+	if util.InSlice(strings.Fields(prompt), "login") {
+		return false
+	}
+
+	seconds, err := strconv.ParseInt(maxAge, 10, 64)
+	if err != nil {
+		return true
+	}
+	return authTime != 0 && time.Now().Unix()-authTime <= seconds
+}
+
+// checkResponseTypeGrant checks the parts of the response type returning tokens from the
+// authorization endpoint against the grant types the application allows
+func checkResponseTypeGrant(rt ResponseType, grantTypes []string) string {
+	if rt.Token && !IsGrantTypeValid("token", grantTypes) {
+		return "token"
+	}
+	if rt.IdToken && !IsGrantTypeValid("id_token", grantTypes) {
+		return "id_token"
+	}
+	return ""
 }
 
 type TokenWrapper struct {
 	AccessToken  string `json:"access_token"`
-	IdToken      string `json:"id_token"`
+	IdToken      string `json:"id_token,omitempty"`
 	RefreshToken string `json:"refresh_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
@@ -174,6 +258,16 @@ func IsGrantTypeValid(method string, grantTypes []string) bool {
 	return false
 }
 
+func isScopeSubset(scope string, grantedScope string) bool {
+	granted := strings.Fields(grantedScope)
+	for _, s := range strings.Fields(scope) {
+		if !util.InSlice(granted, s) {
+			return false
+		}
+	}
+	return true
+}
+
 // isRegexScope returns true if the scope string contains regex metacharacters.
 func isRegexScope(scope string) bool {
 	return strings.ContainsAny(scope, ".*+?^${}()|[]\\")
@@ -249,31 +343,27 @@ func IsScopeValid(scope string, application *Application) bool {
 	return ok
 }
 
-func ExpireTokenByAccessToken(accessToken string) (bool, *Application, *Token, error) {
-	token, err := GetTokenByAccessToken(accessToken)
-	if err != nil {
-		return false, nil, nil, err
-	}
-	if token == nil {
-		return false, nil, nil, nil
-	}
-
+func ExpireToken(token *Token) (bool, error) {
 	token.ExpiresIn = 0
 	affected, err := ormer.Engine.ID(core.PK{token.Owner, token.Name}).Cols("expires_in").Update(token)
 	if err != nil {
-		return false, nil, nil, err
+		return false, err
 	}
 
-	application, err := getApplication(token.Owner, token.Application)
-	if err != nil {
-		return false, nil, nil, err
+	// the tokens refreshed without rotation share the refresh token, it ends with all of them
+	if token.RefreshTokenHash != "" {
+		_, err = ormer.Engine.Where("refresh_token_hash = ? and expires_in > 0", token.RefreshTokenHash).Cols("expires_in").Update(&Token{ExpiresIn: 0})
+		if err != nil {
+			return false, err
+		}
 	}
 
-	return affected != 0, application, token, nil
+	return affected != 0, nil
 }
 
-func CheckOAuthLogin(clientId string, responseType string, redirectUri string, scope string, state string, lang string) (string, *Application, error) {
-	if responseType != "code" && responseType != "token" && responseType != "id_token" {
+func CheckOAuthLogin(clientId string, responseType string, redirectUri string, scope string, state string, nonce string, lang string) (string, *Application, error) {
+	rt, ok := ParseResponseType(responseType)
+	if !ok {
 		return fmt.Sprintf(i18n.Translate(lang, "token:Grant_type: %s is not supported in this application"), responseType), nil, nil
 	}
 
@@ -294,20 +384,43 @@ func CheckOAuthLogin(clientId string, responseType string, redirectUri string, s
 		return i18n.Translate(lang, "token:Invalid scope"), application, nil
 	}
 
+	if grantType := checkResponseTypeGrant(rt, application.GrantTypes); grantType != "" {
+		return fmt.Sprintf(i18n.Translate(lang, "token:Grant_type: %s is not supported in this application"), grantType), application, nil
+	}
+
+	if nonce == "" && rt.IsNonceRequired(scope) {
+		return i18n.Translate(lang, "token:The nonce parameter is required for this response type"), application, nil
+	}
+
 	// Mask application for /api/get-app-login
 	application.ClientSecret = ""
 	return "", application, nil
 }
 
-func GetOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, host string, lang string) (*Code, error) {
-	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, stuHelperAuthz, challenge, resource, host, lang, nil)
+func checkOAuthCodeUser(user *User, application *Application, lang string) (string, error) {
+	if user.IsDeleted {
+		return i18n.Translate(lang, "check:The user has been deleted and cannot be used to sign in, please contact the administrator"), nil
+	}
+
+	isUserOfApplication, err := IsUserOfApplication(user, application)
+	if err != nil {
+		return "", err
+	}
+	if !isUserOfApplication {
+		return i18n.Translate(lang, "auth:Unauthorized operation"), nil
+	}
+	return "", nil
 }
 
-func GetOAuthCodeWithAuthentication(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
-	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, stuHelperAuthz, challenge, resource, host, lang, authentication)
+func GetOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, sessionId string, authTime int64, host string, lang string) (*Code, error) {
+	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, stuHelperAuthz, challenge, resource, sessionId, authTime, host, lang, nil)
 }
 
-func getOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
+func GetOAuthCodeWithAuthentication(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, sessionId string, authTime int64, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
+	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, stuHelperAuthz, challenge, resource, sessionId, authTime, host, lang, authentication)
+}
+
+func getOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, sessionId string, authTime int64, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
 	if len(stuHelperAuthz) > 16<<10 {
 		return nil, fmt.Errorf("stuhelper authorization binding is too large")
 	}
@@ -329,11 +442,22 @@ func getOAuthCode(userId string, clientId string, provider string, signinMethod 
 		}, nil
 	}
 
-	msg, application, err := CheckOAuthLogin(clientId, responseType, redirectUri, scope, state, lang)
+	msg, application, err := CheckOAuthLogin(clientId, responseType, redirectUri, scope, state, nonce, lang)
 	if err != nil {
 		return nil, err
 	}
 
+	if msg != "" {
+		return &Code{
+			Message: msg,
+			Code:    "",
+		}, nil
+	}
+
+	msg, err = checkOAuthCodeUser(user, application, lang)
+	if err != nil {
+		return nil, err
+	}
 	if msg != "" {
 		return &Code{
 			Message: msg,
@@ -363,7 +487,15 @@ func getOAuthCode(userId string, clientId string, provider string, signinMethod 
 	if err != nil {
 		return nil, err
 	}
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, stuHelperAuthz, scope, resource, host, authentication)
+
+	// the code is generated first: an ID token returned together with it carries its c_hash
+	rt, _ := ParseResponseType(responseType)
+	code := util.GenerateAuthorizationCode()
+	options := jwtTokenOptions{AuthTime: authTime, StuHelperAuthz: stuHelperAuthz, Authentication: authentication, WithAtHash: rt.IsCodeOnly() || rt.Token}
+	if rt.IdToken {
+		options.Code = code
+	}
+	accessToken, refreshToken, idToken, tokenName, err := generateJwtTokenWithOptions(application, user, provider, signinMethod, nonce, scope, resource, host, options)
 	if err != nil {
 		return nil, err
 	}
@@ -380,9 +512,10 @@ func getOAuthCode(userId string, clientId string, provider string, signinMethod 
 		Application:   application.Name,
 		Organization:  user.Owner,
 		User:          user.Name,
-		Code:          util.GenerateClientId(),
+		Code:          code,
 		AccessToken:   accessToken,
 		RefreshToken:  refreshToken,
+		IdToken:       idToken,
 		ExpiresIn:     int(application.ExpireInHours * float64(hourSeconds)),
 		Scope:         scope,
 		TokenType:     "Bearer",
@@ -390,6 +523,7 @@ func getOAuthCode(userId string, clientId string, provider string, signinMethod 
 		CodeIsUsed:    false,
 		CodeExpireIn:  time.Now().Add(time.Minute * 5).Unix(),
 		Resource:      resource,
+		SessionId:     sessionId,
 	}
 	_, err = AddToken(token)
 	if err != nil {
@@ -399,6 +533,7 @@ func getOAuthCode(userId string, clientId string, provider string, signinMethod 
 	return &Code{
 		Message: "",
 		Code:    token.Code,
+		Token:   token,
 	}, nil
 }
 
@@ -425,13 +560,6 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 		}
 	}
 
-	if clientSecret != "" && application.ClientSecret != clientSecret {
-		return &TokenError{
-			Error:            InvalidClient,
-			ErrorDescription: "client_secret is invalid",
-		}, nil
-	}
-
 	// check whether the refresh token is valid, and has not expired.
 	token, err := GetTokenByRefreshToken(refreshToken)
 	if err != nil || token == nil {
@@ -439,6 +567,10 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 			Error:            InvalidGrant,
 			ErrorDescription: "refresh token is invalid or revoked",
 		}, nil
+	}
+
+	if tokenError := checkRefreshClientSecret(application, token, clientSecret); tokenError != nil {
+		return tokenError, nil
 	}
 
 	// check if the token has been invalidated (e.g., by SSO logout)
@@ -470,6 +602,11 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 	}
 	resource = token.Resource
 
+	dpopJkt, tokenError := getRefreshDPoPJkt(token, dpopProof, host)
+	if tokenError != nil {
+		return tokenError, nil
+	}
+
 	cert, err := getCertByApplication(application)
 	if err != nil {
 		return nil, err
@@ -484,6 +621,8 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 	var oldTokenScope string
 	var oldStuHelperAuthz string
 	var authentication *AuthenticationContext
+	var oldTokenSubject string
+	var oldAuthTime int64
 	if application.TokenFormat == "JWT-Standard" {
 		oldToken, err := ParseStandardJwtToken(refreshToken, cert)
 		if err != nil {
@@ -493,8 +632,10 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 			}, nil
 		}
 		oldTokenScope = oldToken.Scope
+		oldTokenSubject = oldToken.Subject
+		oldAuthTime = authenticationTimeUnix(oldToken.AuthTime)
 		oldStuHelperAuthz = oldToken.StuHelperAuthz
-		authentication = authenticationContextFromClaims(oldToken.AMR, oldToken.AuthTime, oldToken.ACR)
+		authentication = authenticationContextFromClaims(oldToken.AMR, authenticationTimeUnix(oldToken.AuthTime), oldToken.ACR)
 	} else {
 		oldToken, err := ParseJwtToken(refreshToken, cert)
 		if err != nil {
@@ -504,8 +645,10 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 			}, nil
 		}
 		oldTokenScope = oldToken.Scope
+		oldTokenSubject = oldToken.Subject
+		oldAuthTime = authenticationTimeUnix(oldToken.AuthTime)
 		oldStuHelperAuthz = oldToken.StuHelperAuthz
-		authentication = authenticationContextFromClaims(oldToken.AMR, oldToken.AuthTime, oldToken.ACR)
+		authentication = authenticationContextFromClaims(oldToken.AMR, authenticationTimeUnix(oldToken.AuthTime), oldToken.ACR)
 	}
 
 	scope, oldStuHelperAuthz, refreshScopeError := refreshAuthorizationState(oldTokenScope, oldStuHelperAuthz, scope)
@@ -514,19 +657,27 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 	}
 
 	// generate a new token
-	user, err := getUser(application.Organization, token.User)
+	user, err := getUser(token.Organization, token.User)
 	if err != nil {
 		return nil, err
 	}
-	if user == nil {
-		return "", fmt.Errorf("The user: %s doesn't exist", util.GetId(application.Organization, token.User))
+	// a token issued before its user was renamed still has the old name, the
+	// subject is the user's ID, which a rename keeps
+	if user == nil && oldTokenSubject != "" {
+		user, err = GetUserByUserId(token.Organization, oldTokenSubject)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	if user.IsForbidden {
+	if user == nil {
 		return &TokenError{
 			Error:            InvalidGrant,
-			ErrorDescription: "the user is forbidden to sign in, please contact the administrator",
+			ErrorDescription: fmt.Sprintf("the user: %s doesn't exist", util.GetId(token.Organization, token.User)),
 		}, nil
+	}
+
+	if tokenError := getInactiveUserTokenError(user); tokenError != nil {
+		return tokenError, nil
 	}
 
 	err = ExtendUserWithRolesAndPermissions(user)
@@ -534,12 +685,18 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 		return nil, err
 	}
 
-	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", oldStuHelperAuthz, scope, resource, host, authentication)
+	newAccessToken, newRefreshToken, newIdToken, tokenName, err := generateJwtTokenWithOptions(application, user, "", "", "", scope, resource, host, jwtTokenOptions{AuthTime: oldAuthTime, StuHelperAuthz: oldStuHelperAuthz, Authentication: authentication})
 	if err != nil {
 		return &TokenError{
 			Error:            EndpointError,
 			ErrorDescription: fmt.Sprintf("generate jwt token error: %s", err.Error()),
 		}, nil
+	}
+
+	// without rotation the refresh token is handed back as is and keeps its own expiry, so the
+	// processes sharing it (e.g. the parallel jobs of a CLI) don't revoke it for one another
+	if application.DisableRefreshRotation {
+		newRefreshToken = refreshToken
 	}
 
 	newToken := &Token{
@@ -549,13 +706,17 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 		Application:  application.Name,
 		Organization: user.Owner,
 		User:         user.Name,
-		Code:         util.GenerateClientId(),
+		Code:         util.GenerateAuthorizationCode(),
 		AccessToken:  newAccessToken,
 		RefreshToken: newRefreshToken,
+		IdToken:      newIdToken,
 		ExpiresIn:    int(application.ExpireInHours * float64(hourSeconds)),
 		Scope:        scope,
 		TokenType:    "Bearer",
 		Resource:     resource,
+		GrantType:    token.GrantType,
+		// the refreshed token stays bound to the login session that minted the original one
+		SessionId: token.SessionId,
 	}
 	_, err = AddToken(newToken)
 	if err != nil {
@@ -563,30 +724,26 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 	}
 
 	// Apply DPoP binding to the refreshed token if a DPoP proof was provided.
-	if dpopProof != "" {
-		dpopHtu := GetDPoPHtu(host, "/api/login/oauth/access_token")
-		jkt, err := ValidateDPoPProof(dpopProof, "POST", dpopHtu, "")
-		if err != nil {
-			return &TokenError{
-				Error:            "invalid_dpop_proof",
-				ErrorDescription: err.Error(),
-			}, nil
-		}
+	if dpopJkt != "" {
 		newToken.TokenType = "DPoP"
-		newToken.DPoPJkt = jkt
+		newToken.DPoPJkt = dpopJkt
 		if err = updateTokenDPoP(newToken); err != nil {
 			return nil, err
 		}
 	}
 
-	_, err = DeleteToken(token)
-	if err != nil {
-		return nil, err
+	// the access token of the earlier refresh may still be in use by another sharer of the
+	// refresh token, it expires on its own
+	if !application.DisableRefreshRotation {
+		_, err = DeleteToken(token)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	tokenWrapper := &TokenWrapper{
 		AccessToken:  newToken.AccessToken,
-		IdToken:      newToken.AccessToken,
+		IdToken:      newToken.IdToken,
 		RefreshToken: newToken.RefreshToken,
 		TokenType:    newToken.TokenType,
 		ExpiresIn:    newToken.ExpiresIn,
@@ -614,6 +771,9 @@ func refreshAuthorizationState(oldScope string, oldStuHelperAuthz string, reques
 			Error:            InvalidScope,
 			ErrorDescription: "scope changes are not allowed for a StuHelper-bound refresh token",
 		}
+	}
+	if !isScopeSubset(requestedScope, oldScope) {
+		return "", "", &TokenError{Error: InvalidScope, ErrorDescription: "the requested scope exceeds the scope of the original grant"}
 	}
 	return requestedScope, oldStuHelperAuthz, nil
 }
@@ -654,6 +814,24 @@ func sameOAuthScopeSet(left string, right string) bool {
 	return true
 }
 
+// clientAuthenticatedGrantTypes mark the tokens of a client that authenticated with its secret,
+// their refresh tokens are of no use without the secret either
+var clientAuthenticatedGrantTypes = []string{"authorization_code", "urn:ietf:params:oauth:grant-type:token-exchange"}
+
+func checkRefreshClientSecret(application *Application, token *Token, clientSecret string) *TokenError {
+	if clientSecret == "" && !util.InSlice(clientAuthenticatedGrantTypes, token.GrantType) {
+		return nil
+	}
+
+	if application.ClientSecret != clientSecret {
+		return &TokenError{
+			Error:            InvalidClient,
+			ErrorDescription: "client_secret is invalid",
+		}
+	}
+	return nil
+}
+
 func ValidateJwtAssertion(clientAssertion string, application *Application, host string) (bool, *Claims, error) {
 	_, originBackend := getOriginFromHost(host)
 
@@ -681,15 +859,18 @@ func ValidateJwtAssertion(clientAssertion string, application *Application, host
 	return true, claims, nil
 }
 
-func ValidateClientAssertion(clientAssertion string, host string) (bool, *Application, error) {
-	token, err := ParseJwtTokenWithoutValidation(clientAssertion)
-	if err != nil {
-		return false, nil, err
-	}
+func ValidateClientAssertion(clientAssertion string, clientId string, host string) (bool, *Application, error) {
+	// the subject of an external workload token is not a client ID, so the client_id of the request wins
+	if clientId == "" {
+		token, err := ParseJwtTokenWithoutValidation(clientAssertion)
+		if err != nil {
+			return false, nil, err
+		}
 
-	clientId, err := token.Claims.GetSubject()
-	if err != nil {
-		return false, nil, err
+		clientId, err = token.Claims.GetSubject()
+		if err != nil {
+			return false, nil, err
+		}
 	}
 
 	application, err := GetApplicationByClientId(clientId)
@@ -698,6 +879,14 @@ func ValidateClientAssertion(clientAssertion string, host string) (bool, *Applic
 	}
 	if application == nil {
 		return false, nil, fmt.Errorf("application not found for client: [%s]", clientId)
+	}
+
+	credential, _, err := validateFederatedToken(application, clientAssertion, host)
+	if err != nil {
+		return false, application, err
+	}
+	if credential != nil {
+		return true, application, nil
 	}
 
 	ok, _, err := ValidateJwtAssertion(clientAssertion, application, host)
@@ -713,7 +902,30 @@ func ValidateClientAssertion(clientAssertion string, host string) (bool, *Applic
 
 // mintImplicitToken mints a token for an already-authenticated user.
 // Callers must verify user identity before calling this function.
-func mintImplicitToken(application *Application, username string, scope string, nonce string, host string) (*Token, *TokenError, error) {
+func mintImplicitToken(application *Application, username string, scope string, nonce string, host string, clientIp string, lang string) (*Token, *TokenError, error) {
+	user, err := GetUserByFieldsForSharedApp(application, application.Organization, username)
+	if err != nil {
+		return nil, nil, err
+	}
+	if user != nil {
+		if tokenError := checkGrantUserSignin(application, user, clientIp, lang); tokenError != nil {
+			return nil, tokenError, nil
+		}
+	}
+	return mintTokenForUser(application, user, scope, nonce, host)
+}
+
+// GetDeviceCodeToken takes the full user ID recorded by the browser approval: looking a bare name
+// up again in the application's organization may resolve to another organization's namesake.
+func GetDeviceCodeToken(application *Application, userId string, scope string, nonce string, host string) (*Token, *TokenError, error) {
+	user, err := GetUser(userId)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mintTokenForUser(application, user, scope, nonce, host)
+}
+
+func mintTokenForUser(application *Application, user *User, scope string, nonce string, host string) (*Token, *TokenError, error) {
 	expandedScope, ok := IsScopeValidAndExpand(scope, application)
 	if !ok {
 		return nil, &TokenError{
@@ -723,10 +935,6 @@ func mintImplicitToken(application *Application, username string, scope string, 
 	}
 	scope = expandedScope
 
-	user, err := GetUserByFieldsForSharedApp(application, application.Organization, username)
-	if err != nil {
-		return nil, nil, err
-	}
 	if user == nil {
 		return nil, &TokenError{
 			Error:            InvalidGrant,
@@ -740,33 +948,42 @@ func mintImplicitToken(application *Application, username string, scope string, 
 		}, nil
 	}
 
-	token, err := GetTokenByUser(application, user, scope, nonce, host)
+	token, err := GetTokenByUser(application, user, scope, nonce, "", host)
 	if err != nil {
 		return nil, nil, err
 	}
 	return token, nil, nil
 }
 
+func getUnverifiedSubjectTokenAzp(subjectToken string) (string, *TokenError) {
+	claims := jwt.MapClaims{}
+	_, _, err := jwt.NewParser().ParseUnverified(subjectToken, claims)
+	if err != nil {
+		return "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("invalid subject_token: %s", err.Error())}
+	}
+
+	azp, _ := claims["azp"].(string)
+	if azp == "" {
+		return "", &TokenError{Error: InvalidGrant, ErrorDescription: "subject_token is missing the azp claim"}
+	}
+	return azp, nil
+}
+
 // parseAndValidateSubjectToken validates a subject_token for RFC 8693 token exchange.
 // It uses the ISSUING application's certificate (not the requesting client's) and
 // enforces audience binding to prevent cross-client token reuse.
 func parseAndValidateSubjectToken(subjectToken string, requestingClientId string) (owner, name, scope string, tokenErr *TokenError, err error) {
-	unverifiedToken, err := ParseJwtTokenWithoutValidation(subjectToken)
-	if err != nil {
-		return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("invalid subject_token: %s", err.Error())}, nil
+	azp, tokenErr := getUnverifiedSubjectTokenAzp(subjectToken)
+	if tokenErr != nil {
+		return "", "", "", tokenErr, nil
 	}
 
-	unverifiedClaims, ok := unverifiedToken.Claims.(*Claims)
-	if !ok || unverifiedClaims.Azp == "" {
-		return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: "subject_token is missing the azp claim"}, nil
-	}
-
-	issuingApp, err := GetApplicationByClientId(unverifiedClaims.Azp)
+	issuingApp, err := GetApplicationByClientId(azp)
 	if err != nil {
 		return "", "", "", nil, err
 	}
 	if issuingApp == nil {
-		return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("subject_token issuing application not found: %s", unverifiedClaims.Azp)}, nil
+		return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("subject_token issuing application not found: %s", azp)}, nil
 	}
 
 	cert, err := getCertByApplication(issuingApp)
@@ -774,7 +991,7 @@ func parseAndValidateSubjectToken(subjectToken string, requestingClientId string
 		return "", "", "", nil, err
 	}
 	if cert == nil {
-		return "", "", "", &TokenError{Error: EndpointError, ErrorDescription: fmt.Sprintf("cert for issuing application %s cannot be found", unverifiedClaims.Azp)}, nil
+		return "", "", "", &TokenError{Error: EndpointError, ErrorDescription: fmt.Sprintf("cert for issuing application %s cannot be found", azp)}, nil
 	}
 
 	var audience []string
@@ -783,12 +1000,18 @@ func parseAndValidateSubjectToken(subjectToken string, requestingClientId string
 		if err != nil {
 			return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("invalid subject_token: %s", err.Error())}, nil
 		}
+		if standardClaims.UserStandard == nil {
+			return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: "subject_token has no user"}, nil
+		}
 		owner, name, scope = standardClaims.Owner, standardClaims.Name, standardClaims.Scope
 		audience = standardClaims.Audience
 	} else {
 		claims, err := ParseJwtToken(subjectToken, cert)
 		if err != nil {
 			return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: fmt.Sprintf("invalid subject_token: %s", err.Error())}, nil
+		}
+		if claims.User == nil {
+			return "", "", "", &TokenError{Error: InvalidGrant, ErrorDescription: "subject_token has no user"}, nil
 		}
 		owner, name, scope = claims.Owner, claims.Name, claims.Scope
 		audience = claims.Audience
@@ -844,7 +1067,7 @@ func validateStoredSubjectToken(subjectToken string, issuingApp *Application, ow
 }
 
 // createGuestUserToken creates a new guest user and returns a token for them.
-func createGuestUserToken(application *Application, clientSecret string, verifier string) (*Token, *TokenError, error) {
+func createGuestUserToken(application *Application, clientSecret string, verifier string, lang string) (*Token, *TokenError, error) {
 	if clientSecret != "" && application.ClientSecret != clientSecret {
 		return nil, &TokenError{
 			Error:            InvalidClient,
@@ -905,7 +1128,7 @@ func createGuestUserToken(application *Application, clientSecret string, verifie
 		RegisterSource:    fmt.Sprintf("%s/%s", application.Organization, application.Name),
 	}
 
-	affected, err := AddUser(guestUser, "en")
+	affected, err := AddUser(guestUser, lang)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -927,7 +1150,7 @@ func createGuestUserToken(application *Application, clientSecret string, verifie
 		}, nil
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, guestUser, "", "", "", "", "", "", "", nil)
+	accessToken, refreshToken, idToken, tokenName, err := generateJwtToken(application, guestUser, "", "", "", "", "", "")
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -942,9 +1165,10 @@ func createGuestUserToken(application *Application, clientSecret string, verifie
 		Application:   application.Name,
 		Organization:  guestUser.Owner,
 		User:          guestUser.Name,
-		Code:          util.GenerateClientId(),
+		Code:          util.GenerateAuthorizationCode(),
 		AccessToken:   accessToken,
 		RefreshToken:  refreshToken,
+		IdToken:       idToken,
 		ExpiresIn:     int(application.ExpireInHours * float64(hourSeconds)),
 		Scope:         "",
 		TokenType:     "Bearer",

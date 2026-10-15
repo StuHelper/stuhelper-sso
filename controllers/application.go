@@ -56,14 +56,24 @@ func (c *ApiController) GetApplications() {
 		c.ResponseOk(object.GetMaskedApplications(applications, userId))
 	} else {
 		limit := util.ParseInt(limit)
-		count, err := object.GetApplicationCount(owner, field, value)
+		var count int64
+		if organization == "" {
+			count, err = object.GetApplicationCount(owner, field, value)
+		} else {
+			count, err = object.GetOrganizationApplicationCount(owner, organization, field, value)
+		}
 		if err != nil {
 			c.ResponseError(err.Error())
 			return
 		}
 
 		paginator := pagination.NewPaginator(c.Ctx.Request, limit, count)
-		application, err := object.GetPaginationApplications(owner, paginator.Offset(), limit, field, value, sortField, sortOrder)
+		var application []*object.Application
+		if organization == "" {
+			application, err = object.GetPaginationApplications(owner, paginator.Offset(), limit, field, value, sortField, sortOrder)
+		} else {
+			application, err = object.GetPaginationOrganizationApplications(owner, organization, paginator.Offset(), limit, field, value, sortField, sortOrder)
+		}
 		if err != nil {
 			c.ResponseError(err.Error())
 			return
@@ -265,6 +275,10 @@ func (c *ApiController) AddApplication() {
 		return
 	}
 
+	if !c.requireOrganizationPermission(application.Organization) {
+		return
+	}
+
 	count, err := object.GetApplicationCount("", "", "")
 	if err != nil {
 		c.ResponseError(err.Error())
@@ -301,7 +315,11 @@ func (c *ApiController) AddApplication() {
 		application.Scopes = []*object.ScopeItem{}
 	}
 
-	c.Data["json"] = wrapActionResponse(object.AddApplication(&application))
+	if !c.IsGlobalAdmin() {
+		object.KeepApplicationCustomHtml(&application, nil)
+	}
+
+	c.Data["json"] = wrapActionResponse(object.AddApplication(&application, c.GetAcceptLanguage()))
 	c.ServeJSON()
 }
 

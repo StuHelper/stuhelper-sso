@@ -24,46 +24,57 @@ import (
 
 type ClaimsStandard struct {
 	*UserStandard
-	EmailVerified       bool        `json:"email_verified,omitempty"`
-	PhoneNumber         string      `json:"phone_number,omitempty"`
-	PhoneNumberVerified bool        `json:"phone_number_verified,omitempty"`
-	Gender              string      `json:"gender,omitempty"`
-	TokenType           string      `json:"tokenType,omitempty"`
-	Nonce               string      `json:"nonce,omitempty"`
-	StuHelperAuthz      string      `json:"stuhelper_authz,omitempty"`
-	Scope               string      `json:"scope,omitempty"`
-	AMR                 []string    `json:"amr,omitempty"`
-	AuthTime            int64       `json:"auth_time,omitempty"`
-	ACR                 string      `json:"acr,omitempty"`
-	Address             OIDCAddress `json:"address,omitempty"`
-	Azp                 string      `json:"azp,omitempty"`
-	Provider            string      `json:"provider,omitempty"`
+	EmailVerified       bool         `json:"email_verified,omitempty"`
+	PhoneNumber         string       `json:"phone_number,omitempty"`
+	PhoneNumberVerified bool         `json:"phone_number_verified,omitempty"`
+	Gender              string       `json:"gender,omitempty"`
+	TokenType           string       `json:"tokenType,omitempty"`
+	Nonce               string       `json:"nonce,omitempty"`
+	StuHelperAuthz      string       `json:"stuhelper_authz,omitempty"`
+	AMR                 []string     `json:"amr,omitempty"`
+	ACR                 string       `json:"acr,omitempty"`
+	Scope               string       `json:"scope,omitempty"`
+	Address             *OIDCAddress `json:"address,omitempty"`
+	Azp                 string       `json:"azp,omitempty"`
+	Provider            string       `json:"provider,omitempty"`
 
+	OidcIdTokenClaims
 	jwt.RegisteredClaims
 }
 
-func getStreetAddress(user *User) string {
-	var addrs string
+func getOIDCAddress(user *User) *OIDCAddress {
+	var lines []string
 	for _, addr := range user.Address {
-		addrs += addr + "\n"
+		if addr = strings.TrimSpace(addr); addr != "" {
+			lines = append(lines, addr)
+		}
 	}
-	return addrs
+
+	address := &OIDCAddress{
+		StreetAddress: strings.Join(lines, "\n"),
+		Locality:      user.Location,
+		Country:       user.Region,
+	}
+	if *address == (OIDCAddress{}) {
+		return nil
+	}
+	return address
 }
 
 func getStandardClaims(claims Claims) ClaimsStandard {
 	res := ClaimsStandard{
-		UserStandard:     getStandardUser(claims.User),
-		EmailVerified:    claims.User.EmailVerified,
-		TokenType:        claims.TokenType,
-		Nonce:            claims.Nonce,
-		StuHelperAuthz:   claims.StuHelperAuthz,
-		Scope:            claims.Scope,
-		AMR:              append([]string(nil), claims.AMR...),
-		AuthTime:         claims.AuthTime,
-		ACR:              claims.ACR,
-		RegisteredClaims: claims.RegisteredClaims,
-		Azp:              claims.Azp,
-		Provider:         claims.Provider,
+		UserStandard:      getStandardUser(claims.User),
+		EmailVerified:     claims.User.EmailVerified,
+		TokenType:         claims.TokenType,
+		Nonce:             claims.Nonce,
+		Scope:             claims.Scope,
+		RegisteredClaims:  claims.RegisteredClaims,
+		Azp:               claims.Azp,
+		Provider:          claims.Provider,
+		OidcIdTokenClaims: claims.OidcIdTokenClaims,
+		StuHelperAuthz:    claims.StuHelperAuthz,
+		AMR:               append([]string(nil), claims.AMR...),
+		ACR:               claims.ACR,
 	}
 
 	res.Phone = ""
@@ -77,7 +88,7 @@ func getStandardClaims(claims Claims) ClaimsStandard {
 
 	for _, scope := range scopes {
 		if scope == "address" {
-			res.Address = OIDCAddress{StreetAddress: getStreetAddress(claims.User)}
+			res.Address = getOIDCAddress(claims.User)
 		} else if scope == "profile" {
 			res.Gender = claims.User.Gender
 		} else if scope == "phone" && claims.User.Phone != "" {
@@ -125,6 +136,9 @@ func ParseStandardJwtToken(token string, cert *Cert) (*ClaimsStandard, error) {
 
 	if t != nil {
 		if claims, ok := t.Claims.(*ClaimsStandard); ok && t.Valid {
+			if claims.UserStandard == nil {
+				claims.UserStandard = &UserStandard{}
+			}
 			return claims, nil
 		}
 	}

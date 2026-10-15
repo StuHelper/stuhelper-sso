@@ -127,6 +127,19 @@ var ldapAttributesMapping = map[string]FieldRelation{
 
 const ldapMemberOfAttr = "memberOf"
 
+// userObjectClasses are carried by every published user entry: posixAccount for
+// Unix logins, the Samba ones for SMB clients such as Synology DSM and TrueNAS.
+var userObjectClasses = []string{"posixAccount", "sambaSamAccount", "sambaIdmapEntry"}
+
+func isUserObjectClass(objectClass string) bool {
+	for _, name := range userObjectClasses {
+		if strings.EqualFold(objectClass, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // syntheticUserAttribute is a POSIX attribute the LDAP server computes, so a
 // filter on it is finished in memory. column holds the assigned value, if any.
 type syntheticUserAttribute struct {
@@ -135,9 +148,14 @@ type syntheticUserAttribute struct {
 }
 
 var syntheticUserAttributes = map[string]syntheticUserAttribute{
-	"uidnumber":     {column: "uid_number", getValue: getUidNumber},
-	"gidnumber":     {column: "uid_number", getValue: getUidNumber},
-	"homedirectory": {getValue: getHomeDirectory},
+	"uidnumber":            {column: "uid_number", getValue: getUidNumber},
+	"gidnumber":            {column: "uid_number", getValue: getUidNumber},
+	"homedirectory":        {getValue: getHomeDirectory},
+	"sambasid":             {getValue: getSambaSid},
+	"sambaprimarygroupsid": {getValue: getSambaPrimaryGroupSid},
+	"sambaacctflags":       {getValue: getSambaAcctFlags},
+	"sambadomainname":      {getValue: func(user *object.User) string { return user.Owner }},
+	"sambapwdlastset":      {getValue: getSambaPwdLastSet},
 }
 
 // buildCoarseCondition keeps the rows that can still match: those the value is
@@ -215,7 +233,7 @@ func getNameAndOrgFromFilter(baseDN, filter string) (string, string, int) {
 
 	name, org, err := getNameAndOrgFromDN(fmt.Sprintf("cn=%s,", getUsername(filter)) + baseDN)
 	if err != nil {
-		panic(err)
+		return "", "", ldap.LDAPResultInvalidDNSyntax
 	}
 
 	return name, org, ldap.LDAPResultSuccess
@@ -250,9 +268,25 @@ func stringInSlice(value string, list []string) bool {
 	return false
 }
 
+var ldapPasswordAttrs = []string{"userPassword", "sambaNTPassword"}
+
+func isLdapPasswordAttr(attr string) bool {
+	for _, passwordAttr := range ldapPasswordAttrs {
+		if strings.EqualFold(attr, passwordAttr) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsLdapAttrAllowed checks whether the given LDAP attribute is allowed for the organization.
-// An empty filter or a filter containing "All" means all attributes are allowed.
+// An empty filter or a filter containing "All" means all attributes are allowed, except the
+// password attributes, which are only published when the organization enables them.
 func IsLdapAttrAllowed(org *object.Organization, attr string) bool {
+	if isLdapPasswordAttr(attr) && (org == nil || !org.EnableLdapPassword) {
+		return false
+	}
+
 	if org == nil || len(org.LdapAttributes) == 0 {
 		return true
 	}
@@ -339,7 +373,7 @@ func (q *userSearchFilter) buildCondition(filter interface{}, conjunctive bool) 
 	case message.FilterEqualityMatch:
 		attr := string(f.AttributeDesc())
 
-		if strings.EqualFold(attr, "objectclass") && strings.EqualFold(string(f.AssertionValue()), "posixAccount") {
+		if strings.EqualFold(attr, "objectclass") && isUserObjectClass(string(f.AssertionValue())) {
 			return builder.Expr("1 = 1"), nil
 		}
 

@@ -1,0 +1,40 @@
+name: SSO Stable Updates
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: [SSO CI, SSO Release]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sso-stable-controller
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.repository == 'StuHelper/stuhelper-sso' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run the trusted controller without executing upstream code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp .stuhelper/automation.py "${RUNNER_TEMP}/sso-automation.py"
+          gh auth setup-git
+          python3 -I "${RUNNER_TEMP}/sso-automation.py"

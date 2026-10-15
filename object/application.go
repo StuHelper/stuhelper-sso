@@ -29,6 +29,26 @@ type SigninMethod struct {
 	Rule        string `json:"rule"`
 }
 
+const (
+	// SigninMethodRuleHidePassword disables a signin method instead of only hiding it
+	// in the login page. The rule was named "Hide-Password" when it was added, so the
+	// applications configured before the rename still store the legacy value.
+	SigninMethodRuleHidePassword       = "Hide password"
+	SigninMethodRuleHidePasswordLegacy = "Hide-Password"
+
+	// SigninMethodRuleMagicLinkSignup lets a magic link sent to an address without an
+	// account create that account, the "Sign in only" rule signs existing users in.
+	SigninMethodRuleMagicLinkSignup = "Sign in or sign up"
+)
+
+func (signinMethod *SigninMethod) IsHidden() bool {
+	if signinMethod == nil {
+		return false
+	}
+
+	return signinMethod.Rule == SigninMethodRuleHidePassword || signinMethod.Rule == SigninMethodRuleHidePasswordLegacy
+}
+
 type SignupItem struct {
 	Name        string   `json:"name"`
 	Visible     bool     `json:"visible"`
@@ -83,6 +103,7 @@ type Application struct {
 	Type                         string          `xorm:"varchar(20)" json:"type"`
 	Scopes                       []*ScopeItem    `xorm:"mediumtext" json:"scopes"`
 	Logo                         string          `xorm:"varchar(200)" json:"logo"`
+	LogoDark                     string          `xorm:"varchar(200)" json:"logoDark"`
 	Title                        string          `xorm:"varchar(100)" json:"title"`
 	Favicon                      string          `xorm:"varchar(200)" json:"favicon"`
 	Order                        int             `json:"order"`
@@ -96,12 +117,14 @@ type Application struct {
 	PageHtml                     string          `xorm:"mediumtext" json:"pageHtml"`
 	EnablePassword               bool            `json:"enablePassword"`
 	EnableSignUp                 bool            `json:"enableSignUp"`
+	DisableSelfSignup            bool            `json:"disableSelfSignup"`
 	EnableGuestSignin            bool            `json:"enableGuestSignin"`
 	DisableSignin                bool            `json:"disableSignin"`
 	EnableSigninSession          bool            `json:"enableSigninSession"`
 	EnableAutoSignin             bool            `json:"enableAutoSignin"`
 	EnableCodeSignin             bool            `json:"enableCodeSignin"`
 	EnableExclusiveSignin        bool            `json:"enableExclusiveSignin"`
+	MaxSessions                  int             `json:"maxSessions"`
 	EnableSamlCompress           bool            `json:"enableSamlCompress"`
 	EnableSamlC14n10             bool            `json:"enableSamlC14n10"`
 	EnableSamlPostBinding        bool            `json:"enableSamlPostBinding"`
@@ -112,6 +135,7 @@ type Application struct {
 	EnableLinkWithEmail          bool            `json:"enableLinkWithEmail"`
 	OrgChoiceMode                string          `json:"orgChoiceMode"`
 	SamlReplyUrl                 string          `xorm:"varchar(500)" json:"samlReplyUrl"`
+	SamlSingleLogoutUrl          string          `xorm:"mediumtext" json:"samlSingleLogoutUrl"`
 	Providers                    []*ProviderItem `xorm:"mediumtext" json:"providers"`
 	SigninMethods                []*SigninMethod `xorm:"varchar(2000)" json:"signinMethods"`
 	SignupItems                  []*SignupItem   `xorm:"varchar(3000)" json:"signupItems"`
@@ -126,35 +150,38 @@ type Application struct {
 	IsShared                     bool            `json:"isShared"`
 	IpRestriction                string          `json:"ipRestriction"`
 
-	ClientId                string     `xorm:"varchar(100)" json:"clientId"`
-	ClientSecret            string     `xorm:"varchar(100)" json:"clientSecret"`
-	ClientCert              string     `xorm:"varchar(100)" json:"clientCert"`
-	RedirectUris            []string   `xorm:"varchar(1000)" json:"redirectUris"`
-	BackchannelLogoutUri    string     `xorm:"varchar(500)" json:"backchannelLogoutUri"`
-	ForcedRedirectOrigin    string     `xorm:"varchar(100)" json:"forcedRedirectOrigin"`
-	TokenFormat             string     `xorm:"varchar(100)" json:"tokenFormat"`
-	TokenSigningMethod      string     `xorm:"varchar(100)" json:"tokenSigningMethod"`
-	TokenFields             []string   `xorm:"varchar(1000)" json:"tokenFields"`
-	TokenAttributes         []*JwtItem `xorm:"mediumtext" json:"tokenAttributes"`
-	ExpireInHours           float64    `json:"expireInHours"`
-	RefreshExpireInHours    float64    `json:"refreshExpireInHours"`
-	CookieExpireInHours     int64      `json:"cookieExpireInHours"`
-	SignupUrl               string     `xorm:"varchar(200)" json:"signupUrl"`
-	SigninUrl               string     `xorm:"varchar(200)" json:"signinUrl"`
-	ForgetUrl               string     `xorm:"varchar(200)" json:"forgetUrl"`
-	AffiliationUrl          string     `xorm:"varchar(100)" json:"affiliationUrl"`
-	IpWhitelist             string     `xorm:"varchar(200)" json:"ipWhitelist"`
-	TermsOfUse              string     `xorm:"varchar(200)" json:"termsOfUse"`
-	SignupHtml              string     `xorm:"mediumtext" json:"signupHtml"`
-	SigninHtml              string     `xorm:"mediumtext" json:"signinHtml"`
-	ThemeData               *ThemeData `xorm:"json" json:"themeData"`
-	FooterHtml              string     `xorm:"mediumtext" json:"footerHtml"`
-	FormCss                 string     `xorm:"text" json:"formCss"`
-	FormCssMobile           string     `xorm:"text" json:"formCssMobile"`
-	FormOffset              int        `json:"formOffset"`
-	FormSideHtml            string     `xorm:"mediumtext" json:"formSideHtml"`
-	FormBackgroundUrl       string     `xorm:"varchar(200)" json:"formBackgroundUrl"`
-	FormBackgroundUrlMobile string     `xorm:"varchar(200)" json:"formBackgroundUrlMobile"`
+	ClientId                string                 `xorm:"varchar(100)" json:"clientId"`
+	ClientSecret            string                 `xorm:"varchar(100)" json:"clientSecret"`
+	ClientCert              string                 `xorm:"varchar(100)" json:"clientCert"`
+	FederatedCredentials    []*FederatedCredential `xorm:"mediumtext" json:"federatedCredentials"`
+	RedirectUris            []string               `xorm:"varchar(1000)" json:"redirectUris"`
+	BackchannelLogoutUri    string                 `xorm:"varchar(500)" json:"backchannelLogoutUri"`
+	ForcedRedirectOrigin    string                 `xorm:"varchar(100)" json:"forcedRedirectOrigin"`
+	TokenFormat             string                 `xorm:"varchar(100)" json:"tokenFormat"`
+	TokenSigningMethod      string                 `xorm:"varchar(100)" json:"tokenSigningMethod"`
+	TokenFields             []string               `xorm:"varchar(1000)" json:"tokenFields"`
+	TokenAttributes         []*JwtItem             `xorm:"mediumtext" json:"tokenAttributes"`
+	TokenGroupFormat        string                 `xorm:"varchar(100)" json:"tokenGroupFormat"`
+	ExpireInHours           float64                `json:"expireInHours"`
+	RefreshExpireInHours    float64                `json:"refreshExpireInHours"`
+	DisableRefreshRotation  bool                   `json:"disableRefreshRotation"`
+	CookieExpireInHours     int64                  `json:"cookieExpireInHours"`
+	SignupUrl               string                 `xorm:"varchar(200)" json:"signupUrl"`
+	SigninUrl               string                 `xorm:"varchar(200)" json:"signinUrl"`
+	ForgetUrl               string                 `xorm:"varchar(200)" json:"forgetUrl"`
+	AffiliationUrl          string                 `xorm:"varchar(100)" json:"affiliationUrl"`
+	IpWhitelist             string                 `xorm:"varchar(200)" json:"ipWhitelist"`
+	TermsOfUse              string                 `xorm:"varchar(200)" json:"termsOfUse"`
+	SignupHtml              string                 `xorm:"mediumtext" json:"signupHtml"`
+	SigninHtml              string                 `xorm:"mediumtext" json:"signinHtml"`
+	ThemeData               *ThemeData             `xorm:"json" json:"themeData"`
+	FooterHtml              string                 `xorm:"mediumtext" json:"footerHtml"`
+	FormCss                 string                 `xorm:"text" json:"formCss"`
+	FormCssMobile           string                 `xorm:"text" json:"formCssMobile"`
+	FormOffset              int                    `json:"formOffset"`
+	FormSideHtml            string                 `xorm:"mediumtext" json:"formSideHtml"`
+	FormBackgroundUrl       string                 `xorm:"varchar(200)" json:"formBackgroundUrl"`
+	FormBackgroundUrlMobile string                 `xorm:"varchar(200)" json:"formBackgroundUrlMobile"`
 
 	FailedSigninLimit      int `json:"failedSigninLimit"`
 	FailedSigninFrozenTime int `json:"failedSigninFrozenTime"`
@@ -180,7 +207,7 @@ func (application *Application) HasSigninMethod(name string) bool {
 	}
 
 	for _, signinMethod := range application.SigninMethods {
-		if signinMethod != nil && signinMethod.Name == name && signinMethod.Rule != "Hide password" {
+		if signinMethod != nil && signinMethod.Name == name && !signinMethod.IsHidden() {
 			return true
 		}
 	}
@@ -287,7 +314,7 @@ func GetApplicationByOrganizationName(organization string) (*Application, error)
 	application := Application{}
 	existed, err := ormer.Engine.Where("organization=?", organization).Get(&application)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	if existed {
@@ -320,9 +347,15 @@ func GetApplicationByOrganizationName(organization string) (*Application, error)
 func GetApplicationByUser(user *User) (*Application, error) {
 	if user.SignupApplication != "" {
 		return getApplication("admin", user.SignupApplication)
-	} else {
+	}
+
+	// users without a signup application should get the organization's default one
+	application, err := GetDefaultApplication(util.GetId("admin", user.Owner))
+	if err != nil {
 		return GetApplicationByOrganizationName(user.Owner)
 	}
+
+	return application, nil
 }
 
 func GetApplicationByUserId(userId string) (application *Application, err error) {
@@ -331,7 +364,7 @@ func GetApplicationByUserId(userId string) (application *Application, err error)
 		return nil, err
 	}
 	if IsAppUser(userId) {
-		application, err = getApplication("admin", name)
+		application, err = getAppUserApplication(name)
 		return
 	}
 
@@ -406,6 +439,12 @@ func UpdateApplication(id string, application *Application, isGlobalAdmin bool, 
 		return false, errors.New(i18n.Translate(lang, "auth:Unauthorized operation"))
 	}
 
+	if !isGlobalAdmin {
+		KeepApplicationCustomHtml(application, oldApplication)
+	}
+
+	application.Owner = owner
+
 	if name == "app-built-in" {
 		application.Name = name
 	}
@@ -461,10 +500,8 @@ func UpdateApplication(id string, application *Application, isGlobalAdmin bool, 
 	return affected != 0, nil
 }
 
-func AddApplication(application *Application) (bool, error) {
-	if application.Owner == "" {
-		application.Owner = "admin"
-	}
+func AddApplication(application *Application, lang string) (bool, error) {
+	application.Owner = "admin"
 	if application.Organization == "" {
 		application.Organization = "built-in"
 	}
@@ -482,6 +519,14 @@ func AddApplication(application *Application) (bool, error) {
 
 		application.TokenFormat = tokenFormat
 	}
+	if len(application.TokenFields) == 0 {
+		tokenFields, err := GetDefaultTokenFields(application.Organization)
+		if err != nil {
+			return false, err
+		}
+
+		application.TokenFields = tokenFields
+	}
 
 	app, err := GetApplicationByClientId(application.ClientId)
 	if err != nil {
@@ -496,7 +541,7 @@ func AddApplication(application *Application) (bool, error) {
 		return false, fmt.Errorf("only applications belonging to built-in organization can be shared")
 	}
 
-	err = checkMultipleCaptchaProviders(application, "en")
+	err = checkMultipleCaptchaProviders(application, lang)
 	if err != nil {
 		return false, err
 	}
@@ -517,7 +562,7 @@ func AddApplication(application *Application) (bool, error) {
 		return false, err
 	}
 
-	err = validateCustomScopes(application.CustomScopes, "en")
+	err = validateCustomScopes(application.CustomScopes, lang)
 	if err != nil {
 		return false, err
 	}
@@ -528,7 +573,7 @@ func AddApplication(application *Application) (bool, error) {
 
 	affected, err := ormer.Engine.Insert(application)
 	if err != nil {
-		return false, nil
+		return false, err
 	}
 
 	return affected != 0, nil

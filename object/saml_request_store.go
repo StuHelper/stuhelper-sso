@@ -52,9 +52,9 @@ type samlRequestStore interface {
 var pendingSamlRequests samlRequestStore = newMemorySamlRequestStore()
 
 func InitSamlRequestStore() {
-	endpoint := conf.GetConfigString("redisEndpoint")
-	if endpoint != "" {
-		client, err := newRedisClient(endpoint)
+	config := conf.GetRedisConfig()
+	if config != nil {
+		client, err := newRedisClient(config)
 		if err != nil {
 			pendingSamlRequests = &failedSamlRequestStore{err: fmt.Errorf("SAML request store unavailable: %w", err)}
 			logs.Error("saml_request_store: Redis is configured but unavailable; SAML login is disabled: %v", err)
@@ -169,7 +169,7 @@ func (s *memorySamlRequestStore) DeleteExpired(now time.Time) {
 }
 
 type redisSamlRequestStore struct {
-	client *redis.Client
+	client redis.Cmdable
 }
 
 func (s *redisSamlRequestStore) key(requestId string) string {

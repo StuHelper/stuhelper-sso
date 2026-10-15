@@ -39,11 +39,16 @@ type Response struct {
 	Data2  interface{} `json:"data2"`
 }
 
+func isMcpRequest(urlPath string) bool {
+	// "/api/mcp" is Casdoor's own MCP server, "/api/server/:owner/:name" is the MCP server proxy
+	return urlPath == "/api/mcp" || strings.HasPrefix(urlPath, "/api/server/")
+}
+
 func responseError(ctx *context.Context, error string, data ...interface{}) {
 	// ctx.ResponseWriter.WriteHeader(http.StatusForbidden)
 	urlPath := ctx.Request.URL.Path
-	if urlPath == "/api/mcp" {
-		denyMcpRequest(ctx)
+	if isMcpRequest(urlPath) {
+		denyMcpRequest(ctx, error)
 		return
 	}
 
@@ -63,8 +68,7 @@ func responseError(ctx *context.Context, error string, data ...interface{}) {
 }
 
 func getAcceptLanguage(ctx *context.Context) string {
-	language := ctx.Request.Header.Get("Accept-Language")
-	return conf.GetLanguage(language)
+	return conf.GetAcceptLanguage(ctx.Request.Header.Get("Accept-Language"))
 }
 
 func T(ctx *context.Context, error string) string {
@@ -75,11 +79,25 @@ func denyRequest(ctx *context.Context) {
 	responseError(ctx, T(ctx, "auth:Unauthorized operation"))
 }
 
-func denyMcpRequest(ctx *context.Context) {
+func denyMcpRequest(ctx *context.Context, message string) {
+	// Add WWW-Authenticate header per MCP Authorization spec (RFC 9728), so that the MCP
+	// client knows it should start the OAuth flow instead of treating the error as fatal
+	// Use the same logic as getOriginFromHost to determine the scheme
+	host := ctx.Request.Host
+	scheme := "https"
+	if !strings.Contains(host, ".") {
+		// localhost:8000 or computer-name:80
+		scheme = "http"
+	}
+	resourceMetadataUrl := fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", scheme, host)
+	ctx.Output.Header("WWW-Authenticate", fmt.Sprintf("Bearer realm=\"casdoor\", resource_metadata=\"%s\"", resourceMetadataUrl))
+
 	req := mcpself.McpRequest{}
 	err := json.Unmarshal(ctx.Input.RequestBody, &req)
 	if err != nil {
-		ctx.Output.SetStatus(http.StatusBadRequest)
+		// the request body is not a JSON-RPC request, e.g., the GET request of the MCP proxy
+		ctx.Output.SetStatus(http.StatusUnauthorized)
+		ctx.Output.Body([]byte{})
 		return
 	}
 
@@ -92,19 +110,8 @@ func denyMcpRequest(ctx *context.Context) {
 	resp := mcpself.BuildMcpResponse(req.ID, nil, &mcpself.McpError{
 		Code:    -32001,
 		Message: "Unauthorized",
-		Data:    T(ctx, "auth:Unauthorized operation"),
+		Data:    message,
 	})
-
-	// Add WWW-Authenticate header per MCP Authorization spec (RFC 9728)
-	// Use the same logic as getOriginFromHost to determine the scheme
-	host := ctx.Request.Host
-	scheme := "https"
-	if !strings.Contains(host, ".") {
-		// localhost:8000 or computer-name:80
-		scheme = "http"
-	}
-	resourceMetadataUrl := fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", scheme, host)
-	ctx.Output.Header("WWW-Authenticate", fmt.Sprintf("Bearer realm=\"casdoor\", resource_metadata=\"%s\"", resourceMetadataUrl))
 
 	ctx.Output.SetStatus(http.StatusUnauthorized)
 	_ = ctx.Output.JSON(resp, true, false)
@@ -143,12 +150,7 @@ func getUsernameByClientIdSecret(ctx *context.Context) (string, error) {
 		return "", fmt.Errorf("Incorrect client secret for application: %s", application.Name)
 	}
 
-	for _, tag := range application.Tags {
-		if tag == "dcr" {
-			return fmt.Sprintf("app-dcr/%s", application.Name), nil
-		}
-	}
-	return fmt.Sprintf("app/%s", application.Name), nil
+	return object.GetAppUserId(application), nil
 }
 
 func getUsernameByAccessKey(ctx *context.Context) (string, error) {
@@ -186,6 +188,13 @@ func getUsernameByAccessKey(ctx *context.Context) (string, error) {
 	}
 
 	if key.User != "" {
+		isUserActive, err := key.IsUserActive()
+		if err != nil {
+			return "", err
+		}
+		if !isUserActive {
+			return "", fmt.Errorf("The user of access key: %s is forbidden or deleted", key.Name)
+		}
 		return util.GetId(key.Organization, key.User), nil
 	}
 
@@ -206,6 +215,8 @@ func getSessionUser(ctx *context.Context) string {
 }
 
 func setSessionUser(ctx *context.Context, user string) {
+	ctx.Input.SetData(requestCredentialUserKey, user)
+
 	err := ctx.Input.CruSession.Set(stdcontext.Background(), "username", user)
 	if err != nil {
 		panic(err)
@@ -213,6 +224,50 @@ func setSessionUser(ctx *context.Context, user string) {
 
 	// https://github.com/beego/beego/issues/3445#issuecomment-455411915
 	ctx.Input.CruSession.SessionRelease(stdcontext.Background(), ctx.ResponseWriter)
+}
+
+func setSessionSigninToken(ctx *context.Context, userId string, token *object.Token) {
+	tokenId, _ := ctx.Input.CruSession.Get(stdcontext.Background(), object.SessionSigninTokenId).(string)
+	if tokenId == "" && getSessionUser(ctx) == userId {
+		return
+	}
+
+	err := ctx.Input.CruSession.Set(stdcontext.Background(), object.SessionSigninTokenId, token.GetId())
+	if err != nil {
+		panic(err)
+	}
+}
+
+func clearSessionOfRevokedToken(ctx *context.Context) error {
+	tokenId, _ := ctx.Input.CruSession.Get(stdcontext.Background(), object.SessionSigninTokenId).(string)
+	if tokenId == "" {
+		return nil
+	}
+
+	token, err := object.GetToken(tokenId)
+	if err != nil {
+		return err
+	}
+	if token != nil && token.ExpiresIn > 0 {
+		isExpired, _ := util.IsTokenExpired(token.CreatedTime, token.ExpiresIn)
+		if !isExpired {
+			return nil
+		}
+	}
+
+	return clearSessionOfToken(ctx)
+}
+
+// clearSessionOfToken signs out the session that AutoSigninFilter created from an access token
+func clearSessionOfToken(ctx *context.Context) error {
+	for _, key := range []string{"username", "SessionData", "accessToken", "scope", "aud", object.SessionSigninTokenId} {
+		err := ctx.Input.CruSession.Delete(stdcontext.Background(), key)
+		if err != nil {
+			return err
+		}
+	}
+	ctx.Input.CruSession.SessionRelease(stdcontext.Background(), ctx.ResponseWriter)
+	return nil
 }
 
 func setSessionExpire(ctx *context.Context, ExpireTime int64) {

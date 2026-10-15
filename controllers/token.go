@@ -117,6 +117,10 @@ func (c *ApiController) UpdateToken() {
 		return
 	}
 
+	if !c.requireTokenPermission(&token, true) {
+		return
+	}
+
 	c.Data["json"] = wrapActionResponse(object.UpdateToken(id, &token, c.IsGlobalAdmin()))
 	c.ServeJSON()
 }
@@ -133,6 +137,10 @@ func (c *ApiController) AddToken() {
 	err := json.Unmarshal(c.Ctx.Input.RequestBody, &token)
 	if err != nil {
 		c.ResponseError(err.Error())
+		return
+	}
+
+	if !c.requireTokenPermission(&token, true) {
 		return
 	}
 
@@ -155,8 +163,40 @@ func (c *ApiController) DeleteToken() {
 		return
 	}
 
+	if !c.requireTokenPermission(&token, false) {
+		return
+	}
+
 	c.Data["json"] = wrapActionResponse(object.DeleteToken(&token))
 	c.ServeJSON()
+}
+
+func (c *ApiController) requireTokenPermission(token *object.Token, checkApplication bool) bool {
+	isGlobalAdmin, user := c.isGlobalAdmin()
+	if isGlobalAdmin {
+		return true
+	}
+
+	if user == nil || !user.IsAdmin || user.Owner != token.Organization {
+		c.ResponseError(c.T("auth:Unauthorized operation"))
+		return false
+	}
+
+	if !checkApplication {
+		return true
+	}
+
+	application, err := object.GetApplication(util.GetId("admin", token.Application))
+	if err != nil {
+		c.ResponseError(err.Error())
+		return false
+	}
+	if application == nil || application.Organization != token.Organization {
+		c.ResponseError(c.T("auth:Unauthorized operation"))
+		return false
+	}
+
+	return true
 }
 
 // GetOAuthToken
@@ -172,6 +212,9 @@ func (c *ApiController) DeleteToken() {
 // @Success 401 {object} object.TokenError The Response object
 // @router /login/oauth/access_token [post]
 func (c *ApiController) GetOAuthToken() {
+	c.Ctx.Output.Header("Cache-Control", "no-store")
+	c.Ctx.Output.Header("Pragma", "no-cache")
+
 	clientId := c.Ctx.Input.Query("client_id")
 	clientSecret := c.Ctx.Input.Query("client_secret")
 	assertion := c.Ctx.Input.Query("assertion")
@@ -184,6 +227,7 @@ func (c *ApiController) GetOAuthToken() {
 	nonce := c.Ctx.Input.Query("nonce")
 	username := c.Ctx.Input.Query("username")
 	password := c.Ctx.Input.Query("password")
+	countryCode := c.Ctx.Input.Query("country_code")
 	tag := c.Ctx.Input.Query("tag")
 	avatar := c.Ctx.Input.Query("avatar")
 	refreshToken := c.Ctx.Input.Query("refresh_token")
@@ -234,6 +278,9 @@ func (c *ApiController) GetOAuthToken() {
 			}
 			if password == "" {
 				password = tokenRequest.Password
+			}
+			if countryCode == "" {
+				countryCode = tokenRequest.CountryCode
 			}
 			if tag == "" {
 				tag = tokenRequest.Tag
@@ -347,7 +394,7 @@ func (c *ApiController) GetOAuthToken() {
 		return
 	}
 
-	token, err := object.GetOAuthToken(grantType, clientId, clientSecret, code, verifier, scope, nonce, username, password, host, refreshToken, tag, avatar, c.GetAcceptLanguage(), subjectToken, subjectTokenType, assertion, clientAssertion, clientAssertionType, audience, resource, dpopProof)
+	token, err := object.GetOAuthToken(grantType, clientId, clientSecret, code, verifier, scope, nonce, username, password, countryCode, host, refreshToken, tag, avatar, c.GetAcceptLanguage(), subjectToken, subjectTokenType, assertion, clientAssertion, clientAssertionType, audience, resource, dpopProof, util.GetClientIpFromRequest(c.Ctx.Request))
 	if err != nil {
 		c.ResponseError(err.Error())
 		return
@@ -379,6 +426,9 @@ func (c *ApiController) GetOAuthToken() {
 // @Success 401 {object} object.TokenError The Response object
 // @router /login/oauth/refresh_token [post]
 func (c *ApiController) RefreshToken() {
+	c.Ctx.Output.Header("Cache-Control", "no-store")
+	c.Ctx.Output.Header("Pragma", "no-cache")
+
 	grantType := c.Ctx.Input.Query("grant_type")
 	refreshToken := c.Ctx.Input.Query("refresh_token")
 	scope := c.Ctx.Input.Query("scope")
@@ -402,7 +452,7 @@ func (c *ApiController) RefreshToken() {
 		}
 	}
 
-	ok, application, clientId, _, err := c.ValidateOAuth(true)
+	ok, application, clientId, clientSecret, err := c.ValidateOAuth(true)
 	if err != nil || !ok {
 		return
 	}
@@ -445,7 +495,7 @@ func (c *ApiController) ValidateOAuth(ignoreValidSecret bool) (ok bool, applicat
 	}
 
 	if clientAssertionType == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
-		ok, application, err = object.ValidateClientAssertion(clientAssertion, c.Ctx.Request.Host)
+		ok, application, err = object.ValidateClientAssertion(clientAssertion, reqClientId, c.Ctx.Request.Host)
 		if err != nil {
 			c.ResponseTokenError(object.InvalidClient, err.Error())
 			return

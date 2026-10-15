@@ -15,6 +15,9 @@
 package routers
 
 import (
+	beegocontext "github.com/beego/beego/v2/server/web/context"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,15 +25,22 @@ import (
 )
 
 func TestAuthorizationObjectFromIDUsesOrganizationNameForOrganizationUpdates(t *testing.T) {
-	owner, name, err := authorizationObjectFromID("/api/update-organization", "admin/stuhelper")
+	owner, name, err := authorizationObjectForTest("/api/update-organization", "admin/stuhelper")
 	require.NoError(t, err)
 	assert.Equal(t, "stuhelper", owner)
 	assert.Equal(t, "stuhelper", name)
 }
 
 func TestAuthorizationObjectFromIDPreservesOwnerForOtherResources(t *testing.T) {
-	owner, name, err := authorizationObjectFromID("/api/update-application", "admin/app-stuhelper")
+	owner, name, err := authorizationObjectForTest("/api/update-user", "stuhelper/Alice123")
 	require.NoError(t, err)
-	assert.Equal(t, "admin", owner)
-	assert.Equal(t, "app-stuhelper", name)
+	assert.Equal(t, "stuhelper", owner)
+	assert.Equal(t, "Alice123", name)
+}
+
+func authorizationObjectForTest(path, id string) (string, string, error) {
+	ctx := beegocontext.NewContext()
+	ctx.Reset(httptest.NewRecorder(), httptest.NewRequest("POST", path+"?id="+url.QueryEscape(id), nil))
+	ctx.Input.RequestBody = []byte(`{"owner":"spoofed-org","name":"spoofed-name"}`)
+	return getObject(ctx)
 }
