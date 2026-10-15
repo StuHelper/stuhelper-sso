@@ -1,4 +1,5 @@
 authz/authz_test.go
+maintenance/gate_test.go
 controllers/auth_mfa_step_up_test.go
 controllers/auth_stuhelper_authz_test.go
 form/auth_mfa_context_test.go
@@ -11,5 +12,6 @@ object/token_oidc_claim_string_test.go
 object/token_stuhelper_authz_test.go
 object/token_v4_compatibility_test.go
 routers/authz_filter_test.go
+routers/maintenance_filter_test.go
 routers/record_stuhelper_authz_test.go
 routers/static_filter_step_up_test.go

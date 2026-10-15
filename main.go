@@ -25,6 +25,7 @@ import (
 	"github.com/casdoor/casdoor/authz"
 	"github.com/casdoor/casdoor/conf"
 	"github.com/casdoor/casdoor/ldap"
+	"github.com/casdoor/casdoor/maintenance"
 	"github.com/casdoor/casdoor/object"
 	"github.com/casdoor/casdoor/proxy"
 	"github.com/casdoor/casdoor/radius"
@@ -69,27 +70,17 @@ func main() {
 	}
 
 	object.InitDefaultStorageProvider()
-	object.InitLogProviders()
-	object.InitLdapAutoSynchronizer()
 	proxy.InitHttpClient()
 	authz.InitApi()
 	object.InitUserManager()
 	object.InitFromFile()
-	object.InitCleanupTokens()
-	object.InitCleanupRecords()
-	object.InitCleanupDeviceAuthMap()
 	object.InitSamlRequestStore()
-	object.InitCleanupCasTickets()
 	object.InitSamlAssertionStore()
-	object.InitExpirePermissions()
 
 	object.InitSiteMap()
 	if len(object.SiteMap) != 0 {
 		object.InitRuleMap()
-		object.StartMonitorSitesLoop()
 	}
-
-	util.SafeGoroutine(func() { object.RunSyncUsersJob() })
 
 	// web.DelStaticPath("/static")
 	// web.SetStaticPath("/assets", "web/build/assets")
@@ -100,6 +91,7 @@ func main() {
 	}
 	web.SetStaticPath("/files", "files")
 	// https://studygolang.com/articles/2303
+	web.InsertFilter("*", web.BeforeStatic, routers.MaintenanceFilter)
 	web.InsertFilter("/api/forward-auth", web.BeforeStatic, routers.ForwardAuthFilter)
 	web.InsertFilter("*", web.BeforeStatic, routers.RequestBodyFilter)
 	web.InsertFilter("*", web.BeforeStatic, routers.ContentTypeFilter)
@@ -143,16 +135,24 @@ func main() {
 		panic(err)
 	}
 
-	go ldap.StartLdapServer()
-	go radius.StartRadiusServer()
-	go object.ClearThroughputPerSecond()
-
-	// Start webhook delivery worker
-	object.StartWebhookDeliveryWorker()
-
-	if len(object.SiteMap) != 0 {
-		service.Start()
-	}
+	maintenance.Default.StartServices(func() {
+		object.InitLogProviders()
+		object.InitLdapAutoSynchronizer()
+		object.InitCleanupTokens()
+		object.InitCleanupRecords()
+		object.InitCleanupDeviceAuthMap()
+		object.InitCleanupCasTickets()
+		object.InitExpirePermissions()
+		util.SafeGoroutine(func() { object.RunSyncUsersJob() })
+		go ldap.StartLdapServer()
+		go radius.StartRadiusServer()
+		go object.ClearThroughputPerSecond()
+		object.StartWebhookDeliveryWorker()
+		if len(object.SiteMap) != 0 {
+			object.StartMonitorSitesLoop()
+			service.Start()
+		}
+	})
 
 	web.Run(fmt.Sprintf(":%v", port))
 }

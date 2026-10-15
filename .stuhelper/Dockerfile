@@ -6,13 +6,15 @@ ARG CASDOOR_UPSTREAM_COMMIT
 ARG CASDOOR_UPSTREAM_VERSION
 ARG CASDOOR_COMPONENT_VERSION
 ARG CASDOOR_RELEASE_INPUT_SHA256
+ARG CASDOOR_DATABASE_MAJOR
 LABEL org.opencontainers.image.title="StuHelper SSO" \
       org.opencontainers.image.source="https://github.com/StuHelper/stuhelper-sso" \
       org.opencontainers.image.revision="${SSO_SOURCE_COMMIT}" \
       org.opencontainers.image.version="${CASDOOR_COMPONENT_VERSION}" \
       io.stuhelper.sso.source-commit="${SSO_SOURCE_COMMIT}" \
-      io.stuhelper.sso.database-major="4" \
-      io.stuhelper.sso.rollback-policy="restore-pre-upgrade-database-for-major-downgrade" \
+      io.stuhelper.sso.database-major="${CASDOOR_DATABASE_MAJOR}" \
+      io.stuhelper.sso.migration-gate="v1" \
+      io.stuhelper.sso.rollback-policy="restore-pre-upgrade-database" \
       io.stuhelper.casdoor.upstream-commit="${CASDOOR_UPSTREAM_COMMIT}" \
       io.stuhelper.casdoor.upstream-version="${CASDOOR_UPSTREAM_VERSION}" \
       io.stuhelper.casdoor.component-version="${CASDOOR_COMPONENT_VERSION}" \

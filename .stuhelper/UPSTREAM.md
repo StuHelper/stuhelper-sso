@@ -64,3 +64,21 @@ SBOM, and publishes the immutable version. It never receives production secrets.
 The main repository discovers the public release, independently verifies the
 exact publisher, approves the digest, and enforces database rehearsal on the
 production host before switching the service. Publication alone is not deployment.
+
+## Migration maintenance gate
+
+The main deployment controller owns the private transaction marker
+`/conf/stuhelper-maintenance` in the existing configuration directory mount.
+A candidate boot with this marker serves only read-only OIDC discovery/JWKS and
+returns 503 for every other HTTP path, including direct internal API calls.
+Background sync, LDAP, webhook delivery, expiry and cleanup jobs wait until the
+controller commits the migration. HTTP admission opens only after their startup
+initialization completes. The marker has no HTTP mutation endpoint.
+
+The consumer performs online isolated restoration rehearsal first. It then
+freezes the identity writer, verifies a final backup by restoring and booting the
+old image, starts the candidate behind the gate, and commits only after runtime
+checks. Once the gate is released, database rollback is forbidden because new
+identity writes or external background work may have occurred; late ledger errors
+require forward reconciliation. Automatic production maintenance starts only in
+the owner-approved Beijing 03:00–05:00 window, enforced in the consumer repository.
