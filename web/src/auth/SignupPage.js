@@ -51,6 +51,17 @@ const formItemLayout = {
   },
 };
 
+const stuHelperUsernameRegex = "^[A-Za-z][A-Za-z0-9]{4,19}$";
+const signupPolicyHintStyle = {color: "#8c8c8c", display: "block", fontSize: "12px", lineHeight: "20px", textAlign: "left"};
+
+const renderSignupPolicyHint = (signupItem) => {
+  if (signupItem.name === "Username" && signupItem.regex === stuHelperUsernameRegex) {
+    return <span className="signup-username-policy-hint" style={signupPolicyHintStyle}>{i18next.t("signup:Username policy hint")}</span>;
+  }
+
+  return null;
+};
+
 const renderFormItem = (signupItem) => {
   const commonRules = [
     {
@@ -463,7 +474,9 @@ class SignupPage extends React.Component {
       if (signupItem.regex) {
         usernameRules.push({
           pattern: new RegExp(signupItem.regex),
-          message: i18next.t("signup:The input doesn't match the signup item regex!"),
+          message: signupItem.regex === stuHelperUsernameRegex
+            ? i18next.t("signup:Username policy mismatch")
+            : i18next.t("signup:The input doesn't match the signup item regex!"),
         });
       }
       return (
@@ -471,6 +484,7 @@ class SignupPage extends React.Component {
           name="username"
           className="signup-username"
           label={signupItem.label ? signupItem.label : i18next.t("signup:Username")}
+          extra={renderSignupPolicyHint(signupItem)}
           rules={usernameRules}
         >
           <Input className="signup-username-input" placeholder={signupItem.placeholder}

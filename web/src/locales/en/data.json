@@ -1484,6 +1484,8 @@
     "The input is not valid Phone!": "The input is not valid Phone!",
     "Username": "Username",
     "Username - Tooltip": "The username to authenticate with the external service or identity provider",
+    "Username policy hint": "Use 5–20 letters or digits and start with a letter. The username cannot be changed after registration.",
+    "Username policy mismatch": "The username does not meet the requirements. Please update it.",
     "Your account has been created!": "Your account has been created!",
     "Your confirmed password is inconsistent with the password!": "Your confirmed password is inconsistent with the password!",
     "sign in now": "sign in now"

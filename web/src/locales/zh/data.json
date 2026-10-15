@@ -1484,6 +1484,8 @@
     "The input is not valid Phone!": "您输入的手机号格式有误！",
     "Username": "用户名",
     "Username - Tooltip": "注册时使用的用户名",
+    "Username policy hint": "5–20 位，须以英文字母开头，只能包含英文字母和数字；注册后不可修改。",
+    "Username policy mismatch": "用户名不符合规范，请修改",
     "Your account has been created!": "您的账号已成功创建！",
     "Your confirmed password is inconsistent with the password!": "您两次输入的密码不一致！",
     "sign in now": "立即登录"
