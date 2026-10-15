@@ -135,6 +135,7 @@ export function getOAuthGetParameters(params) {
   }
 
   const nonce = getRefinedValue(queries.get("nonce"));
+  const stuHelperAuthz = getRefinedValue(queries.get("stuhelper_authz"));
   const challengeMethod = getRefinedValue(queries.get("code_challenge_method"));
   const codeChallenge = getRefinedValue(queries.get("code_challenge"));
   const responseMode = getRefinedValue(queries.get("response_mode"));
@@ -158,6 +159,7 @@ export function getOAuthGetParameters(params) {
       scope: scope,
       state: state,
       nonce: nonce,
+      stuHelperAuthz: stuHelperAuthz,
       challengeMethod: challengeMethod,
       codeChallenge: codeChallenge,
       responseMode: responseMode,

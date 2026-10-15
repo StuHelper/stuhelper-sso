@@ -299,15 +299,18 @@ func CheckOAuthLogin(clientId string, responseType string, redirectUri string, s
 	return "", application, nil
 }
 
-func GetOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, challenge string, resource string, host string, lang string) (*Code, error) {
-	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, challenge, resource, host, lang, nil)
+func GetOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, host string, lang string) (*Code, error) {
+	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, stuHelperAuthz, challenge, resource, host, lang, nil)
 }
 
-func GetOAuthCodeWithAuthentication(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
-	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, challenge, resource, host, lang, authentication)
+func GetOAuthCodeWithAuthentication(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
+	return getOAuthCode(userId, clientId, provider, signinMethod, responseType, redirectUri, scope, state, nonce, stuHelperAuthz, challenge, resource, host, lang, authentication)
 }
 
-func getOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
+func getOAuthCode(userId string, clientId string, provider string, signinMethod string, responseType string, redirectUri string, scope string, state string, nonce string, stuHelperAuthz string, challenge string, resource string, host string, lang string, authentication *AuthenticationContext) (*Code, error) {
+	if len(stuHelperAuthz) > 16<<10 {
+		return nil, fmt.Errorf("stuhelper authorization binding is too large")
+	}
 	user, err := GetUser(userId)
 	if err != nil {
 		return nil, err
@@ -360,10 +363,11 @@ func getOAuthCode(userId string, clientId string, provider string, signinMethod 
 	if err != nil {
 		return nil, err
 	}
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, scope, resource, host, authentication)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, stuHelperAuthz, scope, resource, host, authentication)
 	if err != nil {
 		return nil, err
 	}
+	refreshToken = authorizationCodeRefreshToken(stuHelperAuthz, scope, refreshToken)
 
 	if challenge == "null" {
 		challenge = ""
@@ -478,6 +482,7 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 	}
 
 	var oldTokenScope string
+	var oldStuHelperAuthz string
 	var authentication *AuthenticationContext
 	if application.TokenFormat == "JWT-Standard" {
 		oldToken, err := ParseStandardJwtToken(refreshToken, cert)
@@ -488,6 +493,7 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 			}, nil
 		}
 		oldTokenScope = oldToken.Scope
+		oldStuHelperAuthz = oldToken.StuHelperAuthz
 		authentication = authenticationContextFromClaims(oldToken.AMR, oldToken.AuthTime, oldToken.ACR)
 	} else {
 		oldToken, err := ParseJwtToken(refreshToken, cert)
@@ -498,11 +504,13 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 			}, nil
 		}
 		oldTokenScope = oldToken.Scope
+		oldStuHelperAuthz = oldToken.StuHelperAuthz
 		authentication = authenticationContextFromClaims(oldToken.AMR, oldToken.AuthTime, oldToken.ACR)
 	}
 
-	if scope == "" {
-		scope = oldTokenScope
+	scope, oldStuHelperAuthz, refreshScopeError := refreshAuthorizationState(oldTokenScope, oldStuHelperAuthz, scope)
+	if refreshScopeError != nil {
+		return refreshScopeError, nil
 	}
 
 	// generate a new token
@@ -526,7 +534,7 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 		return nil, err
 	}
 
-	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, resource, host, authentication)
+	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", oldStuHelperAuthz, scope, resource, host, authentication)
 	if err != nil {
 		return &TokenError{
 			Error:            EndpointError,
@@ -585,6 +593,65 @@ func RefreshToken(application *Application, grantType string, refreshToken strin
 		Scope:        newToken.Scope,
 	}
 	return tokenWrapper, nil
+}
+
+func refreshAuthorizationState(oldScope string, oldStuHelperAuthz string, requestedScope string) (string, string, *TokenError) {
+	if oldStuHelperAuthz != "" && !oauthScopeContains(oldScope, "offline_access") {
+		return "", "", &TokenError{
+			Error:            InvalidGrant,
+			ErrorDescription: "offline_access was not granted for this StuHelper-bound refresh token",
+		}
+	}
+	if requestedScope == "" {
+		requestedScope = oldScope
+	}
+	// StuHelper authorization bindings cover the exact canonical scope set.
+	// Casdoor cannot mint a replacement StuHelper HMAC when a refresh changes
+	// that set, so reject before generateJwtToken instead of returning an active
+	// provider token which every disclosure request would reject.
+	if oldStuHelperAuthz != "" && !sameOAuthScopeSet(oldScope, requestedScope) {
+		return "", "", &TokenError{
+			Error:            InvalidScope,
+			ErrorDescription: "scope changes are not allowed for a StuHelper-bound refresh token",
+		}
+	}
+	return requestedScope, oldStuHelperAuthz, nil
+}
+
+func authorizationCodeRefreshToken(stuHelperAuthz string, scope string, refreshToken string) string {
+	if stuHelperAuthz != "" && !oauthScopeContains(scope, "offline_access") {
+		return ""
+	}
+	return refreshToken
+}
+
+func oauthScopeContains(scope string, target string) bool {
+	for _, item := range strings.Fields(scope) {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sameOAuthScopeSet(left string, right string) bool {
+	leftSet := map[string]struct{}{}
+	for _, scope := range strings.Fields(left) {
+		leftSet[scope] = struct{}{}
+	}
+	rightSet := map[string]struct{}{}
+	for _, scope := range strings.Fields(right) {
+		rightSet[scope] = struct{}{}
+	}
+	if len(leftSet) != len(rightSet) {
+		return false
+	}
+	for scope := range leftSet {
+		if _, ok := rightSet[scope]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func ValidateJwtAssertion(clientAssertion string, application *Application, host string) (bool, *Claims, error) {
@@ -860,7 +927,7 @@ func createGuestUserToken(application *Application, clientSecret string, verifie
 		}, nil
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, guestUser, "", "", "", "", "", "", nil)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, guestUser, "", "", "", "", "", "", "", nil)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,

@@ -27,13 +27,14 @@ import (
 
 type Claims struct {
 	*User
-	TokenType string   `json:"tokenType,omitempty"`
-	Nonce     string   `json:"nonce,omitempty"`
-	Tag       string   `json:"tag"`
-	Scope     string   `json:"scope,omitempty"`
-	AMR       []string `json:"amr,omitempty"`
-	AuthTime  int64    `json:"auth_time,omitempty"`
-	ACR       string   `json:"acr,omitempty"`
+	TokenType      string   `json:"tokenType,omitempty"`
+	Nonce          string   `json:"nonce,omitempty"`
+	StuHelperAuthz string   `json:"stuhelper_authz,omitempty"`
+	Tag            string   `json:"tag"`
+	Scope          string   `json:"scope,omitempty"`
+	AMR            []string `json:"amr,omitempty"`
+	AuthTime       int64    `json:"auth_time,omitempty"`
+	ACR            string   `json:"acr,omitempty"`
 	// the `azp` (Authorized Party) claim. Optional. See https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 	Azp      string `json:"azp,omitempty"`
 	Provider string `json:"provider,omitempty"`
@@ -156,14 +157,15 @@ type UserWithoutThirdIdp struct {
 
 type ClaimsShort struct {
 	*UserShort
-	TokenType string   `json:"tokenType,omitempty"`
-	Nonce     string   `json:"nonce,omitempty"`
-	Scope     string   `json:"scope,omitempty"`
-	AMR       []string `json:"amr,omitempty"`
-	AuthTime  int64    `json:"auth_time,omitempty"`
-	ACR       string   `json:"acr,omitempty"`
-	Azp       string   `json:"azp,omitempty"`
-	Provider  string   `json:"provider,omitempty"`
+	TokenType      string   `json:"tokenType,omitempty"`
+	Nonce          string   `json:"nonce,omitempty"`
+	StuHelperAuthz string   `json:"stuhelper_authz,omitempty"`
+	Scope          string   `json:"scope,omitempty"`
+	AMR            []string `json:"amr,omitempty"`
+	AuthTime       int64    `json:"auth_time,omitempty"`
+	ACR            string   `json:"acr,omitempty"`
+	Azp            string   `json:"azp,omitempty"`
+	Provider       string   `json:"provider,omitempty"`
 
 	SigninMethod string `json:"signinMethod,omitempty"`
 	jwt.RegisteredClaims
@@ -180,15 +182,16 @@ type OIDCAddress struct {
 
 type ClaimsWithoutThirdIdp struct {
 	*UserWithoutThirdIdp
-	TokenType string   `json:"tokenType,omitempty"`
-	Nonce     string   `json:"nonce,omitempty"`
-	Tag       string   `json:"tag"`
-	Scope     string   `json:"scope,omitempty"`
-	AMR       []string `json:"amr,omitempty"`
-	AuthTime  int64    `json:"auth_time,omitempty"`
-	ACR       string   `json:"acr,omitempty"`
-	Azp       string   `json:"azp,omitempty"`
-	Provider  string   `json:"provider,omitempty"`
+	TokenType      string   `json:"tokenType,omitempty"`
+	Nonce          string   `json:"nonce,omitempty"`
+	StuHelperAuthz string   `json:"stuhelper_authz,omitempty"`
+	Tag            string   `json:"tag"`
+	Scope          string   `json:"scope,omitempty"`
+	AMR            []string `json:"amr,omitempty"`
+	AuthTime       int64    `json:"auth_time,omitempty"`
+	ACR            string   `json:"acr,omitempty"`
+	Azp            string   `json:"azp,omitempty"`
+	Provider       string   `json:"provider,omitempty"`
 
 	SigninMethod string `json:"signinMethod,omitempty"`
 	jwt.RegisteredClaims
@@ -319,6 +322,7 @@ func getShortClaims(claims Claims) ClaimsShort {
 		UserShort:        getShortUser(claims.User),
 		TokenType:        claims.TokenType,
 		Nonce:            claims.Nonce,
+		StuHelperAuthz:   claims.StuHelperAuthz,
 		Scope:            claims.Scope,
 		AMR:              append([]string(nil), claims.AMR...),
 		AuthTime:         claims.AuthTime,
@@ -336,6 +340,7 @@ func getClaimsWithoutThirdIdp(claims Claims) ClaimsWithoutThirdIdp {
 		UserWithoutThirdIdp: getUserWithoutThirdIdp(claims.User),
 		TokenType:           claims.TokenType,
 		Nonce:               claims.Nonce,
+		StuHelperAuthz:      claims.StuHelperAuthz,
 		Tag:                 claims.Tag,
 		Scope:               claims.Scope,
 		AMR:                 append([]string(nil), claims.AMR...),
@@ -418,6 +423,9 @@ func getClaimsCustom(claims Claims, tokenField []string, tokenAttributes []*JwtI
 	// Always include nonce and scope as they are built-in OAuth/OIDC fields (even if empty)
 	res["nonce"] = claims.Nonce
 	res["scope"] = claims.Scope
+	if claims.StuHelperAuthz != "" {
+		res["stuhelper_authz"] = claims.StuHelperAuthz
+	}
 	if len(claims.AMR) > 0 {
 		res["amr"] = append([]string(nil), claims.AMR...)
 	}
@@ -529,7 +537,7 @@ func refineUser(user *User) *User {
 	return user
 }
 
-func generateJwtToken(application *Application, user *User, provider string, signinMethod string, nonce string, scope string, resource string, host string, authentication *AuthenticationContext) (string, string, string, error) {
+func generateJwtToken(application *Application, user *User, provider string, signinMethod string, nonce string, stuHelperAuthz string, scope string, resource string, host string, authentication *AuthenticationContext) (string, string, string, error) {
 	nowTime := time.Now()
 	expireTime := nowTime.Add(time.Duration(application.ExpireInHours * float64(time.Hour)))
 	refreshExpireTime := nowTime.Add(time.Duration(application.RefreshExpireInHours * float64(time.Hour)))
@@ -553,9 +561,10 @@ func generateJwtToken(application *Application, user *User, provider string, sig
 	jti := util.GetId(application.Owner, name)
 
 	claims := Claims{
-		User:      user,
-		TokenType: "access-token",
-		Nonce:     nonce,
+		User:           user,
+		TokenType:      "access-token",
+		Nonce:          nonce,
+		StuHelperAuthz: stuHelperAuthz,
 		// FIXME: A workaround for custom claim by reusing `tag` in user info
 		Tag:          user.Tag,
 		Scope:        scope,

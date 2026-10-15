@@ -25,6 +25,7 @@ export function grantConsent(consent, oAuthParams) {
     scope: oAuthParams.scope,
     state: oAuthParams.state,
     nonce: oAuthParams.nonce || "",
+    stuHelperAuthz: oAuthParams.stuHelperAuthz || "",
     challenge: oAuthParams.codeChallenge || "",
     resource: oAuthParams.resource || "",
   };

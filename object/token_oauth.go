@@ -309,7 +309,7 @@ func GetPasswordToken(application *Application, username string, password string
 		return nil, nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, "", host, nil)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", "", scope, "", host, nil)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -370,7 +370,7 @@ func GetClientCredentialsToken(application *Application, clientSecret string, sc
 		Type:  "application",
 	}
 
-	accessToken, _, tokenName, err := generateJwtToken(application, nullUser, "", "", "", scope, "", host, nil)
+	accessToken, _, tokenName, err := generateJwtToken(application, nullUser, "", "", "", "", scope, "", host, nil)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -462,7 +462,7 @@ func GetTokenByUser(application *Application, user *User, scope string, nonce st
 		return nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", nonce, scope, "", host, nil)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", nonce, "", scope, "", host, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +575,7 @@ func GetWechatMiniProgramToken(application *Application, code string, host strin
 		return nil, nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", "", "", host, nil)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", "", "", "", host, nil)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -708,7 +708,7 @@ func GetTokenExchangeToken(application *Application, clientSecret string, subjec
 		return nil, nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, "", host, nil)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", "", scope, "", host, nil)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,

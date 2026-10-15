@@ -30,6 +30,7 @@ type ClaimsStandard struct {
 	Gender              string      `json:"gender,omitempty"`
 	TokenType           string      `json:"tokenType,omitempty"`
 	Nonce               string      `json:"nonce,omitempty"`
+	StuHelperAuthz      string      `json:"stuhelper_authz,omitempty"`
 	Scope               string      `json:"scope,omitempty"`
 	AMR                 []string    `json:"amr,omitempty"`
 	AuthTime            int64       `json:"auth_time,omitempty"`
@@ -55,6 +56,7 @@ func getStandardClaims(claims Claims) ClaimsStandard {
 		EmailVerified:    claims.User.EmailVerified,
 		TokenType:        claims.TokenType,
 		Nonce:            claims.Nonce,
+		StuHelperAuthz:   claims.StuHelperAuthz,
 		Scope:            claims.Scope,
 		AMR:              append([]string(nil), claims.AMR...),
 		AuthTime:         claims.AuthTime,

@@ -262,7 +262,7 @@ class PromptPage extends React.Component {
       const signInUrl = sessionStorage.getItem("signinUrl");
       return oauth === "true" ? signInUrl : "";
     }
-    return `${redirectUri}?code=${code}&state=${state}`;
+    return `${redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
   }
 
   getRequiredSetupSigninUrl() {

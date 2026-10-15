@@ -408,7 +408,7 @@ class SignupPage extends React.Component {
           if (oAuthParams && res.data && typeof res.data === "string" && !res.data.includes("/")) {
             // OAuth code returned, redirect to redirect_uri with code
             const code = res.data;
-            const redirectUrl = `${oAuthParams.redirectUri}${oAuthParams.redirectUri.includes("?") ? "&" : "?"}code=${code}&state=${oAuthParams.state}`;
+            const redirectUrl = `${oAuthParams.redirectUri}${oAuthParams.redirectUri.includes("?") ? "&" : "?"}code=${encodeURIComponent(code)}&state=${encodeURIComponent(oAuthParams.state ?? "")}`;
             Setting.goToLink(redirectUrl);
             return;
           }

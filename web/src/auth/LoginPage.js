@@ -357,7 +357,7 @@ class LoginPage extends React.Component {
     const code = resp.data;
     const concatChar = oAuthParams?.redirectUri?.includes("?") ? "&" : "?";
     const noRedirect = oAuthParams.noRedirect;
-    const redirectUrl = `${oAuthParams.redirectUri}${concatChar}code=${code}&state=${oAuthParams.state}`;
+    const redirectUrl = `${oAuthParams.redirectUri}${concatChar}code=${encodeURIComponent(code)}&state=${encodeURIComponent(oAuthParams.state ?? "")}`;
     if (resp.data === RequiredMfa) {
       this.props.onLoginSuccess(window.location.href);
       return;
@@ -420,7 +420,7 @@ class LoginPage extends React.Component {
                 Setting.goToLink(redirectUrl);
               }
             } else {
-              Setting.goToLinkSoft(ths, `/prompt/${application.name}?redirectUri=${oAuthParams.redirectUri}&code=${code}&state=${oAuthParams.state}`);
+              Setting.goToLinkSoft(ths, `/prompt/${application.name}?redirectUri=${encodeURIComponent(oAuthParams.redirectUri)}&code=${encodeURIComponent(code)}&state=${encodeURIComponent(oAuthParams.state ?? "")}`);
             }
           } else {
             Setting.showMessage("error", `${i18next.t("application:Failed to sign in")}: ${res.msg}`);
@@ -609,7 +609,7 @@ class LoginPage extends React.Component {
                 };
                 createFormAndSubmit(oAuthParams?.redirectUri, params);
               } else {
-                Setting.goToLink(`${oAuthParams.redirectUri}#${amendatoryResponseType}=${accessToken}&state=${oAuthParams.state}&token_type=bearer`);
+                Setting.goToLink(`${oAuthParams.redirectUri}#${amendatoryResponseType}=${accessToken}&state=${encodeURIComponent(oAuthParams.state ?? "")}&token_type=bearer`);
               }
             } else if (responseType === "saml") {
               if (res.data === RequiredMfa) {
@@ -1286,7 +1286,7 @@ class LoginPage extends React.Component {
             };
             createFormAndSubmit(oAuthParams?.redirectUri, params);
           } else {
-            Setting.goToLink(`${oAuthParams.redirectUri}#${amendatoryResponseType}=${accessToken}&state=${oAuthParams.state}&token_type=bearer`);
+            Setting.goToLink(`${oAuthParams.redirectUri}#${amendatoryResponseType}=${accessToken}&state=${encodeURIComponent(oAuthParams.state ?? "")}&token_type=bearer`);
           }
         } else {
           Setting.showMessage("success", i18next.t("application:Logged in successfully"));
@@ -1406,9 +1406,12 @@ class LoginPage extends React.Component {
         const resourceQuery = oAuthParams?.resource
           ? `&resource=${encodeURIComponent(oAuthParams.resource)}`
           : "";
+        const stuHelperAuthzQuery = oAuthParams?.stuHelperAuthz
+          ? `&stuhelper_authz=${encodeURIComponent(oAuthParams.stuHelperAuthz)}`
+          : "";
         let finishUrl = `${Setting.ServerUrl}/api/webauthn/signin/finish?responseType=${values["type"]}`;
         if (values["type"] === "code") {
-          finishUrl = `${Setting.ServerUrl}/api/webauthn/signin/finish?responseType=${values["type"]}&clientId=${oAuthParams.clientId}&scope=${oAuthParams.scope}&redirectUri=${oAuthParams.redirectUri}&nonce=${oAuthParams.nonce}&state=${oAuthParams.state}&codeChallenge=${oAuthParams.codeChallenge}&challengeMethod=${oAuthParams.challengeMethod}${resourceQuery}`;
+          finishUrl = `${Setting.ServerUrl}/api/webauthn/signin/finish?responseType=${values["type"]}&clientId=${oAuthParams.clientId}&scope=${oAuthParams.scope}&redirectUri=${encodeURIComponent(oAuthParams.redirectUri)}&nonce=${encodeURIComponent(oAuthParams.nonce ?? "")}&state=${encodeURIComponent(oAuthParams.state ?? "")}&code_challenge=${oAuthParams.codeChallenge}&code_challenge_method=${oAuthParams.challengeMethod}${resourceQuery}${stuHelperAuthzQuery}`;
         }
         return fetch(finishUrl, {
           method: "POST",
@@ -1435,7 +1438,7 @@ class LoginPage extends React.Component {
                 this.postCodeLoginAction(res);
               } else if (responseType === "token" || responseType === "id_token") {
                 const accessToken = res.data;
-                Setting.goToLink(`${oAuthParams.redirectUri}#${responseType}=${accessToken}?state=${oAuthParams.state}&token_type=bearer`);
+                Setting.goToLink(`${oAuthParams.redirectUri}#${responseType}=${accessToken}?state=${encodeURIComponent(oAuthParams.state ?? "")}&token_type=bearer`);
               } else {
                 Setting.showMessage("success", i18next.t("login:Successfully logged in with WebAuthn credentials"));
                 Setting.goToLink("/");

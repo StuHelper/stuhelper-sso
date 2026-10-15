@@ -41,6 +41,14 @@ var alwaysLoggedActions = map[string]bool{
 	"sso-logout": true,
 }
 
+var stuHelperAuthorizationBindingActions = map[string]bool{
+	"device-auth-complete":   true,
+	"grant-consent":          true,
+	"login":                  true,
+	"signup":                 true,
+	"webauthn/signin/finish": true,
+}
+
 func init() {
 	logPostOnly = conf.GetConfigBool("logPostOnly")
 	passwordRegex = regexp.MustCompile("\"password\":\"([^\"]*?)\"")
@@ -89,14 +97,18 @@ func NewRecord(ctx *context.Context) (*Record, error) {
 	}
 
 	// "id_token_hint" carries a JWT, so it is dropped instead of being persisted in the audit row.
-	requestUri := util.FilterQuery(ctx.Request.RequestURI, []string{"accessToken", "id_token_hint"})
+	requestUri := util.FilterQuery(ctx.Request.RequestURI, []string{"accessToken", "id_token_hint", "stuhelper_authz"})
 	if len(requestUri) > 1000 {
 		requestUri = requestUri[0:1000]
 	}
 
 	object := ""
 	if ctx.Input.RequestBody != nil && len(ctx.Input.RequestBody) != 0 {
-		object = string(ctx.Input.RequestBody)
+		if stuHelperAuthorizationBindingActions[action] {
+			object = sanitizeStuHelperAuthorizationBindingObject(ctx.Input.RequestBody)
+		} else {
+			object = string(ctx.Input.RequestBody)
+		}
 		object = maskPassword(object)
 	}
 
@@ -145,6 +157,38 @@ func NewRecord(ctx *context.Context) (*Record, error) {
 		IsTriggered: false,
 	}
 	return &record, nil
+}
+
+func sanitizeStuHelperAuthorizationBindingObject(raw []byte) string {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		// These endpoints accept structured JSON. Persisting an unparseable body
+		// would be a fail-open path for a malformed authorization binding.
+		return `{"recording":"invalid_json_omitted"}`
+	}
+	removeStuHelperAuthorizationBinding(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `{"recording":"json_encoding_failed"}`
+	}
+	return string(encoded)
+}
+
+func removeStuHelperAuthorizationBinding(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "stuHelperAuthz" || key == "stuhelper_authz" {
+				delete(typed, key)
+				continue
+			}
+			removeStuHelperAuthorizationBinding(child)
+		}
+	case []any:
+		for _, child := range typed {
+			removeStuHelperAuthorizationBinding(child)
+		}
+	}
 }
 
 func addRecord(record *Record) (int64, error) {

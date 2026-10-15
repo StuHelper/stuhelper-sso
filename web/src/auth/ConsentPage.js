@@ -121,7 +121,7 @@ class ConsentPage extends React.Component {
           // res.data contains the authorization code
           const code = res.data;
           const concatChar = oAuthParams?.redirectUri?.includes("?") ? "&" : "?";
-          const redirectUrl = `${oAuthParams.redirectUri}${concatChar}code=${code}&state=${oAuthParams.state}`;
+          const redirectUrl = `${oAuthParams.redirectUri}${concatChar}code=${encodeURIComponent(code)}&state=${encodeURIComponent(oAuthParams.state ?? "")}`;
           Setting.goToLink(redirectUrl);
         } else {
           Setting.showMessage("error", res.msg);
@@ -133,7 +133,7 @@ class ConsentPage extends React.Component {
   handleDeny() {
     const {oAuthParams} = this.state;
     const concatChar = oAuthParams?.redirectUri?.includes("?") ? "&" : "?";
-    Setting.goToLink(`${oAuthParams.redirectUri}${concatChar}error=access_denied&error_description=User denied consent&state=${oAuthParams.state}`);
+    Setting.goToLink(`${oAuthParams.redirectUri}${concatChar}error=access_denied&error_description=User denied consent&state=${encodeURIComponent(oAuthParams.state ?? "")}`);
   }
 
   render() {

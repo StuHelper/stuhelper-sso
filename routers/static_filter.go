@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,6 +81,7 @@ func fastAutoSignin(ctx *context.Context) (string, error) {
 	scope := ctx.Input.Query("scope")
 	state := ctx.Input.Query("state")
 	nonce := ctx.Input.Query("nonce")
+	stuHelperAuthz := ctx.Input.Query("stuhelper_authz")
 	codeChallenge := ctx.Input.Query("code_challenge")
 	resource := ctx.Input.Query("resource")
 	if clientId == "" || responseType != "code" || redirectUri == "" {
@@ -124,7 +126,7 @@ func fastAutoSignin(ctx *context.Context) (string, error) {
 		return "", nil
 	}
 
-	code, err := object.GetOAuthCode(userId, clientId, "", "autoSignin", responseType, redirectUri, scope, state, nonce, codeChallenge, resource, ctx.Request.Host, getAcceptLanguage(ctx))
+	code, err := object.GetOAuthCode(userId, clientId, "", "autoSignin", responseType, redirectUri, scope, state, nonce, stuHelperAuthz, codeChallenge, resource, ctx.Request.Host, getAcceptLanguage(ctx))
 	if err != nil {
 		return "", err
 	} else if code.Message != "" {
@@ -135,8 +137,12 @@ func fastAutoSignin(ctx *context.Context) (string, error) {
 	if strings.Contains(redirectUri, "?") {
 		sep = "&"
 	}
-	res := fmt.Sprintf("%s%scode=%s&state=%s", redirectUri, sep, code.Code, state)
+	res := buildOAuthCodeRedirectURL(redirectUri, sep, code.Code, state)
 	return res, nil
+}
+
+func buildOAuthCodeRedirectURL(redirectURI, separator, code, state string) string {
+	return fmt.Sprintf("%s%scode=%s&state=%s", redirectURI, separator, url.QueryEscape(code), url.QueryEscape(state))
 }
 
 func oidcReauthenticationRequested(ctx *context.Context) bool {

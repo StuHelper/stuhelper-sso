@@ -14,7 +14,11 @@
 
 package routers
 
-import "testing"
+import (
+	"net/url"
+	"strings"
+	"testing"
+)
 
 func TestOIDCReauthenticationParameters(t *testing.T) {
 	tests := []struct {
@@ -33,5 +37,27 @@ func TestOIDCReauthenticationParameters(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestAutoSigninRedirectPreservesOpaqueState(t *testing.T) {
+	const state = "  opaque +&=/% state  "
+	const code = "code+&=/"
+	redirect := buildOAuthCodeRedirectURL("https://rp.example/callback?existing=value", "&", code, state)
+	parsed, err := url.Parse(redirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("state"); got != state {
+		t.Fatalf("state = %q, want byte-preserved %q", got, state)
+	}
+	if got := parsed.Query().Get("code"); got != code {
+		t.Fatalf("code = %q, want %q", got, code)
+	}
+	if got := parsed.Query().Get("existing"); got != "value" {
+		t.Fatalf("existing query = %q, want value", got)
+	}
+	if strings.Contains(redirect, "&state="+state) {
+		t.Fatalf("opaque state was interpolated without query encoding: %q", redirect)
 	}
 }

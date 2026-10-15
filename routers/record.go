@@ -84,7 +84,7 @@ func RecordMessage(ctx *context.Context) {
 }
 
 func AfterRecordMessage(ctx *context.Context) {
-	record, err := object.NewRecord(ctx)
+	record, err := newRecordForAfterRecordMessage(ctx)
 	if err != nil {
 		fmt.Printf("AfterRecordMessage() error: %s\n", err.Error())
 		return
@@ -144,4 +144,8 @@ func AfterRecordMessage(ctx *context.Context) {
 			object.AddRecord(record2)
 		}
 	})
+}
+
+func newRecordForAfterRecordMessage(ctx *context.Context) (*object.Record, error) {
+	return object.NewRecord(ctx)
 }

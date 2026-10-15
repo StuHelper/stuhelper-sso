@@ -58,6 +58,39 @@ func tokenToResponse(token *object.Token) *Response {
 	return &Response{Status: "ok", Msg: "", Data: token.AccessToken, Data2: token.RefreshToken}
 }
 
+type oauthCodeRequestParameters struct {
+	clientID        string
+	responseType    string
+	redirectURI     string
+	scope           string
+	state           string
+	nonce           string
+	stuHelperAuthz  string
+	challengeMethod string
+	codeChallenge   string
+	resource        string
+}
+
+// oauthCodeRequestParametersFromContext deliberately reads the opaque RP
+// nonce and the StuHelper authorization binding as independent values from the
+// current Beego request context. Every successful login path that calls
+// HandleLoggedIn, including WebAuthnSigninFinish, therefore reaches the same
+// authorization-code minting path without replacing or normalizing the nonce.
+func (c *ApiController) oauthCodeRequestParametersFromContext() oauthCodeRequestParameters {
+	return oauthCodeRequestParameters{
+		clientID:        c.Ctx.Input.Query("clientId"),
+		responseType:    c.Ctx.Input.Query("responseType"),
+		redirectURI:     c.Ctx.Input.Query("redirectUri"),
+		scope:           c.Ctx.Input.Query("scope"),
+		state:           c.Ctx.Input.Query("state"),
+		nonce:           c.Ctx.Input.Query("nonce"),
+		stuHelperAuthz:  c.Ctx.Input.Query("stuhelper_authz"),
+		challengeMethod: c.Ctx.Input.Query("code_challenge_method"),
+		codeChallenge:   c.Ctx.Input.Query("code_challenge"),
+		resource:        c.Ctx.Input.Query("resource"),
+	}
+}
+
 // HandleLoggedIn ...
 func (c *ApiController) HandleLoggedIn(application *object.Application, user *object.User, form *form.AuthForm) (resp *Response) {
 	if user.IsForbidden {
@@ -179,22 +212,14 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 		util.LogInfo(c.Ctx, "API: [%s] signed in", userId)
 		resp = &Response{Status: "ok", Msg: "", Data: userId}
 	} else if form.Type == ResponseTypeCode {
-		clientId := c.Ctx.Input.Query("clientId")
-		responseType := c.Ctx.Input.Query("responseType")
-		redirectUri := c.Ctx.Input.Query("redirectUri")
-		scope := c.Ctx.Input.Query("scope")
-		state := c.Ctx.Input.Query("state")
-		nonce := c.Ctx.Input.Query("nonce")
-		challengeMethod := c.Ctx.Input.Query("code_challenge_method")
-		codeChallenge := c.Ctx.Input.Query("code_challenge")
-		resource := c.Ctx.Input.Query("resource")
+		request := c.oauthCodeRequestParametersFromContext()
 
-		if challengeMethod != "S256" && challengeMethod != "null" && challengeMethod != "" {
+		if request.challengeMethod != "S256" && request.challengeMethod != "null" && request.challengeMethod != "" {
 			c.ResponseError(c.T("auth:Challenge method should be S256"))
 			return
 		}
 
-		consentRequired, err := object.CheckConsentRequired(user, application, scope)
+		consentRequired, err := object.CheckConsentRequired(user, application, request.scope)
 		if err != nil {
 			c.ResponseError(err.Error())
 			return
@@ -209,7 +234,7 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 		if consentRequired {
 			resp = &Response{Status: "ok", Data: map[string]bool{"required": true}}
 		} else {
-			code, err := object.GetOAuthCodeWithAuthentication(userId, clientId, form.Provider, form.SigninMethod, responseType, redirectUri, scope, state, nonce, codeChallenge, resource, c.Ctx.Request.Host, c.GetAcceptLanguage(), authentication)
+			code, err := object.GetOAuthCodeWithAuthentication(userId, request.clientID, form.Provider, form.SigninMethod, request.responseType, request.redirectURI, request.scope, request.state, request.nonce, request.stuHelperAuthz, request.codeChallenge, request.resource, c.Ctx.Request.Host, c.GetAcceptLanguage(), authentication)
 			if err != nil {
 				c.ResponseError(err.Error(), nil)
 				return
