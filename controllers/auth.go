@@ -926,6 +926,10 @@ func (c *ApiController) Login() {
 			c.ResponseError(fmt.Sprintf(c.T("auth:The provider: %s does not exist"), authForm.Provider))
 			return
 		}
+		if provider.State == "Disabled" {
+			c.ResponseError(fmt.Sprintf(c.T("auth:The provider: %s is not enabled for the application"), provider.Name))
+			return
+		}
 
 		providerItem := application.GetProviderItem(provider.Name)
 		if !providerItem.IsProviderVisible() {
@@ -936,9 +940,41 @@ func (c *ApiController) Login() {
 		var token *oauth2.Token
 		if provider.Category == "SAML" {
 			// SAML
-			userInfo, err = object.ParseSamlResponse(authForm.SamlResponse, provider, c.Ctx.Request.Host)
+			var requestId string
+			requestId, err = object.GetSamlResponseRequestId(authForm.SamlResponse)
 			if err != nil {
 				c.ResponseError(err.Error())
+				return
+			}
+			var requestState object.SamlRequestState
+			var found bool
+			requestState, found, err = object.LoadSamlRequest(requestId)
+			if err != nil {
+				c.ResponseError("SAML authentication request store is unavailable")
+				return
+			}
+			if !found {
+				c.ResponseError("SAML authentication request is missing or has already been used")
+				return
+			}
+			sessionId := c.Ctx.Input.CruSession.SessionID(context.Background())
+			if err = object.ValidateSamlRequestState(requestState, sessionId, provider.GetId(), authForm.RelayState, time.Now()); err != nil {
+				c.ResponseError(err.Error())
+				return
+			}
+			userInfo, err = object.ParseSamlResponse(authForm.SamlResponse, provider, c.Ctx.Request.Host, requestId)
+			if err != nil {
+				c.ResponseError(err.Error())
+				return
+			}
+			var consumedState object.SamlRequestState
+			consumedState, found, err = object.ConsumeSamlRequest(requestId)
+			if err != nil {
+				c.ResponseError("SAML authentication request store is unavailable")
+				return
+			}
+			if !found || !object.SameSamlRequestState(requestState, consumedState) {
+				c.ResponseError("SAML authentication request is missing or has already been used")
 				return
 			}
 		} else if provider.Category == "OAuth" || provider.Category == "Web3" {
@@ -1394,9 +1430,15 @@ func (c *ApiController) Login() {
 func (c *ApiController) GetSamlLogin() {
 	providerId := c.Ctx.Input.Query("id")
 	relayState := c.Ctx.Input.Query("relayState")
-	authURL, method, err := object.GenerateSamlRequest(providerId, relayState, c.Ctx.Request.Host, c.GetAcceptLanguage())
+	authURL, method, requestId, err := object.GenerateSamlRequest(providerId, relayState, c.Ctx.Request.Host, c.GetAcceptLanguage())
 	if err != nil {
 		c.ResponseError(err.Error())
+		return
+	}
+	sessionId := c.Ctx.Input.CruSession.SessionID(context.Background())
+	requestState := object.NewSamlRequestState(sessionId, providerId, relayState, time.Now())
+	if err = object.StoreSamlRequest(requestId, requestState); err != nil {
+		c.ResponseError("SAML authentication request store is unavailable")
 		return
 	}
 	c.ResponseOk(authURL, method)

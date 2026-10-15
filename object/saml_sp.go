@@ -26,6 +26,7 @@ import (
 	"github.com/casdoor/casdoor/idp"
 	"github.com/mitchellh/mapstructure"
 	saml2 "github.com/russellhaering/gosaml2"
+	saml2types "github.com/russellhaering/gosaml2/types"
 	dsig "github.com/russellhaering/goxmldsig"
 )
 
@@ -47,7 +48,22 @@ func IsValidSamlRedirectURL(redirectURL, host string) bool {
 	return parsed.Host == originParsed.Host
 }
 
-func ParseSamlResponse(samlResponse string, provider *Provider, host string) (*idp.UserInfo, error) {
+func GetSamlResponseRequestId(samlResponse string) (string, error) {
+	samlResponse, err := url.QueryUnescape(samlResponse)
+	if err != nil {
+		return "", fmt.Errorf("invalid SAML response encoding: %w", err)
+	}
+	response, err := saml2.DecodeUnverifiedBaseResponse(samlResponse)
+	if err != nil {
+		return "", fmt.Errorf("invalid SAML response: %w", err)
+	}
+	if response.InResponseTo == "" {
+		return "", fmt.Errorf("SAML response is not correlated to an authentication request")
+	}
+	return response.InResponseTo, nil
+}
+
+func ParseSamlResponse(samlResponse string, provider *Provider, host, expectedRequestId string) (*idp.UserInfo, error) {
 	samlResponse, _ = url.QueryUnescape(samlResponse)
 	sp, err := buildSp(provider, samlResponse, host)
 	if err != nil {
@@ -56,6 +72,9 @@ func ParseSamlResponse(samlResponse string, provider *Provider, host string) (*i
 
 	assertionInfo, err := sp.RetrieveAssertionInfo(samlResponse)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateSamlAssertionRequestIds(assertionInfo.Assertions, expectedRequestId); err != nil {
 		return nil, err
 	}
 	if err = validateSamlAssertionWarnings(assertionInfo.WarningInfo); err != nil {
@@ -97,35 +116,58 @@ func ParseSamlResponse(samlResponse string, provider *Provider, host string) (*i
 	return userInfo, err
 }
 
-func GenerateSamlRequest(id, relayState, host, lang string) (auth string, method string, err error) {
+func validateSamlAssertionRequestIds(assertions []saml2types.Assertion, expectedRequestId string) error {
+	if expectedRequestId == "" || len(assertions) == 0 {
+		return fmt.Errorf("SAML response does not match the issued authentication request")
+	}
+	for _, assertion := range assertions {
+		if assertion.Subject == nil ||
+			assertion.Subject.SubjectConfirmation == nil ||
+			assertion.Subject.SubjectConfirmation.SubjectConfirmationData == nil ||
+			assertion.Subject.SubjectConfirmation.SubjectConfirmationData.InResponseTo != expectedRequestId {
+			return fmt.Errorf("SAML response does not match the issued authentication request")
+		}
+	}
+	return nil
+}
+
+func GenerateSamlRequest(id, relayState, host, lang string) (auth string, method string, requestId string, err error) {
 	provider, err := GetProvider(id)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	if provider.Category != "SAML" {
-		return "", "", fmt.Errorf(i18n.Translate(lang, "saml_sp:provider %s's category is not SAML"), provider.Name)
+	if provider == nil || provider.Category != "SAML" || provider.State == "Disabled" {
+		return "", "", "", fmt.Errorf(i18n.Translate(lang, "saml_sp:provider %s's category is not SAML"), id)
 	}
 
 	sp, err := buildSp(provider, "", host)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
+	}
+	doc, err := sp.BuildAuthRequestDocument()
+	if err != nil {
+		return "", "", "", err
+	}
+	requestId = doc.Root().SelectAttrValue("ID", "")
+	if requestId == "" {
+		return "", "", "", fmt.Errorf("generated SAML authentication request has no ID")
 	}
 
 	if provider.EnableSignAuthnRequest {
-		post, err := sp.BuildAuthBodyPost(relayState)
+		post, err := sp.BuildAuthBodyPostFromDocument(relayState, doc)
 		if err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		auth = string(post[:])
 		method = "POST"
 	} else {
-		auth, err = sp.BuildAuthURL(relayState)
+		auth, err = sp.BuildAuthURLFromDocument(relayState, doc)
 		if err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		method = "GET"
 	}
-	return auth, method, nil
+	return auth, method, requestId, nil
 }
 
 func buildSp(provider *Provider, samlResponse string, host string) (*saml2.SAMLServiceProvider, error) {
