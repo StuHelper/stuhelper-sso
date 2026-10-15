@@ -52,6 +52,7 @@ jobs:
           metadata="${SSO_BUILD_OUTPUT}/release-input.json"
           SOURCE_DATE_EPOCH="$(jq -r .sourceDateEpoch "${metadata}")" \
           docker buildx build --load --platform linux/amd64 --tag sso-candidate:local \
+            --build-arg "SOURCE_DATE_EPOCH=$(jq -r .sourceDateEpoch "${metadata}")" \
             --build-arg "SSO_SOURCE_COMMIT=$(jq -r .sourceCommit "${metadata}")" \
             --build-arg "CASDOOR_UPSTREAM_COMMIT=$(jq -r .upstreamCommit "${metadata}")" \
             --build-arg "CASDOOR_UPSTREAM_VERSION=$(jq -r .upstreamVersion "${metadata}")" \
