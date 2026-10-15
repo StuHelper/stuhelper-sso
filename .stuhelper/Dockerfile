@@ -22,10 +22,10 @@ LABEL org.opencontainers.image.title="StuHelper SSO" \
       io.stuhelper.casdoor.release-input-sha256="${CASDOOR_RELEASE_INPUT_SHA256}"
 
 RUN apk add --no-cache \
-      ca-certificates=20260611-r0 \
-      tzdata=2026c-r0 \
-      libcrypto3=3.5.8-r0 \
-      libssl3=3.5.8-r0 \
+      ca-certificates=20260909-r0 \
+      tzdata=2026e-r0 \
+      libcrypto3=3.5.9-r0 \
+      libssl3=3.5.9-r0 \
     && adduser -D -u 1000 casdoor \
     && mkdir -p /logs /conf /web/build /files \
     && chown -R casdoor:casdoor /logs /conf /web /files
