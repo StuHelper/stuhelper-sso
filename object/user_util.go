@@ -1144,6 +1144,9 @@ func replaceAttributeValue(user *User, value string) []string {
 		valueList = replaceAttributeValuesWithList("$user.groups", user.Groups, valueList)
 	}
 
+	valueList = replaceAttributeValues("$user.isAdmin", strconv.FormatBool(user.IsAdmin), valueList)
+	valueList = replaceAttributeValues("$user.isForbidden", strconv.FormatBool(user.IsForbidden), valueList)
+	valueList = replaceAttributeValues("$user.isDeleted", strconv.FormatBool(user.IsDeleted), valueList)
 	valueList = replaceAttributeValues("$user.owner", user.Owner, valueList)
 	valueList = replaceAttributeValues("$user.name", user.Name, valueList)
 	valueList = replaceAttributeValues("$user.email", user.Email, valueList)
