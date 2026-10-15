@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "https://github.com/StuHelper/StuHelper",
+  "sourceCommit": "9bcb7374ff42dfb4b6ff1272d5c742384b1e3d70",
+  "upstreamRepository": "https://github.com/casdoor/casdoor",
+  "upstreamVersion": "v3.156.2",
+  "upstreamCommit": "2aa8b7615399b7b132e8e9e57a25891ac77673ce",
+  "patches": [
+    {
+      "id": "mfa-context",
+      "sourcePath": "infra/casdoor/casdoor-v3.155.2-stuhelper-mfa.patch",
+      "sourcePatchSHA256": "746c75605752ddf61b66ec07fa0f15f67f494b650c040eb5050feb5caced1dae",
+      "effectivePatchSHA256": "107a0e99803d820a16c0e24c227027c60eb9f9d63f4f9bf0bca12ea80987a9f6",
+      "commit": "43226ddb6211116d534b8777f043ca0e82b7d7fb"
+    },
+    {
+      "id": "account-compliance",
+      "sourcePath": "infra/casdoor/casdoor-v3.155.2-account-compliance.patch",
+      "sourcePatchSHA256": "304a89efcb1bd6a92a25a71ebc14b9753e6cf4a51ca6b5988514c3cf38af3957",
+      "effectivePatchSHA256": "304a89efcb1bd6a92a25a71ebc14b9753e6cf4a51ca6b5988514c3cf38af3957",
+      "commit": "432104ca33d0bf74979c0bf4a949fb91d6c97482"
+    },
+    {
+      "id": "registration-hints",
+      "sourcePath": "infra/casdoor/casdoor-v3.155.2-registration-hints.patch",
+      "sourcePatchSHA256": "1dd9082b3eb6d0bb89451469be7907d2edca566639064e86982b21324114e11f",
+      "effectivePatchSHA256": "1dd9082b3eb6d0bb89451469be7907d2edca566639064e86982b21324114e11f",
+      "commit": "f12c00244848a0a1b5c657ecbc02dcbee7c0fcd0"
+    },
+    {
+      "id": "saml-correlation",
+      "sourcePath": "infra/casdoor/casdoor-v3.155.2-saml-correlation.patch",
+      "sourcePatchSHA256": "8613e6c763e6ad86ec503861b386a068c101e9c0120292c39f723e25b395e9df",
+      "effectivePatchSHA256": "8613e6c763e6ad86ec503861b386a068c101e9c0120292c39f723e25b395e9df",
+      "commit": "c1b65529413cf0d5d0d965c2263b8f13b08fa4c1"
+    },
+    {
+      "id": "oidc-boolean-string-claims",
+      "sourcePath": "infra/casdoor/casdoor-v3.155.2-oidc-boolean-string-claims.patch",
+      "sourcePatchSHA256": "76d48b815521f6dc0a5506dfdefb87ccb9c91c1a84506f7e7a85180c26d2abfb",
+      "effectivePatchSHA256": "76d48b815521f6dc0a5506dfdefb87ccb9c91c1a84506f7e7a85180c26d2abfb",
+      "commit": "df054394c68780be2411d2e3a4f56980a975f317"
+    },
+    {
+      "id": "open-platform-authz-binding",
+      "sourcePath": "infra/casdoor/casdoor-v3.155.2-open-platform-authz-binding.patch",
+      "sourcePatchSHA256": "351797e58bd4853ab7e9f0e8668b71d0cc915469d0316d21b13d9ccd825fae59",
+      "effectivePatchSHA256": "8204b18755ce736e36a877423dd9cf4e974ede256c10e6192b693e6e4feb3dba",
+      "commit": "ed10c86e250a70451be3eae404feabf73317020c"
+    }
+  ],
+  "patchedSourceTree": "7ebb688ebebfe406133cb96d895fb4a05cc6eece",
+  "scope": "Source patch equivalence only; dependency locks, runtime artifacts and production identity are verified separately."
+}
