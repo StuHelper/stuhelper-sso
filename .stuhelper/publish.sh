@@ -9,7 +9,7 @@ set -euo pipefail
 metadata="${SSO_BUILD_OUTPUT:?}/release-input.json"
 [[ "$(jq -r .sourceCommit "${metadata}")" == "${GITHUB_SHA}" ]]
 [[ "$(jq -r .componentVersion "${metadata}")" == "${COMPONENT_VERSION}" ]]
-image=ghcr.io/stuhelper/casdoor
+image=ghcr.io/stuhelper/stuhelper-sso
 tag="${image}:${COMPONENT_VERSION}"
 probe="${RUNNER_TEMP}/sso-tag-probe.log"
 # A lookup failure is not permission to overwrite an existing release.

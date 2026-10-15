@@ -15,6 +15,7 @@ LABEL org.opencontainers.image.title="StuHelper SSO" \
       io.stuhelper.sso.database-major="${CASDOOR_DATABASE_MAJOR}" \
       io.stuhelper.sso.migration-gate="v1" \
       io.stuhelper.sso.rollback-policy="restore-pre-upgrade-database" \
+      io.stuhelper.casdoor.upstream-source="https://github.com/casdoor/casdoor" \
       io.stuhelper.casdoor.upstream-commit="${CASDOOR_UPSTREAM_COMMIT}" \
       io.stuhelper.casdoor.upstream-version="${CASDOOR_UPSTREAM_VERSION}" \
       io.stuhelper.casdoor.component-version="${CASDOOR_COMPONENT_VERSION}" \

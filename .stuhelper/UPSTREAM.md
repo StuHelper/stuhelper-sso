@@ -33,11 +33,13 @@ A production v3-to-v4 migration still requires an authorized database backup/res
 rehearsal and consumer acceptance against the exact signed image digest. Source CI,
 artifact publication, deployment and real-user acceptance remain separate stages.
 
-The OCI image name stays `ghcr.io/stuhelper/casdoor` for existing consumer compatibility.
-The publisher identity moves to `StuHelper/stuhelper-sso/.github/workflows/release.yml`
-on `main`; the main repository must verify that exact identity and issue a separate
-deployment approval. Give the new repository Actions access to that GHCR package
-before the first authorized publication. Only the main deployer updates `component-current`.
+The independent publisher owns `ghcr.io/stuhelper/stuhelper-sso`. The main
+repository verifies its exact signature/provenance/SBOM and copies the unchanged
+manifest digest into its existing private `ghcr.io/stuhelper/casdoor` deployment
+package before issuing a separate deployment approval. The old private package
+is not granted to this public repository, and only the main deployer updates
+`component-current`. Existing production image references and historical package
+access remain valid while build ownership moves to this repository.
 
 Public source/CI uses GitHub-hosted runners. GitHub environments and branch/tag
 protection are configured separately from the YAML; the release workflow alone is
