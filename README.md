@@ -1,3 +1,17 @@
+# StuHelper SSO
+
+Public Casdoor source fork for StuHelper, currently based on **v4.20.0**. The active frontend is the upstream v4 TypeScript implementation with the required StuHelper authentication and account-policy extensions.
+
+- [Upstream provenance and customization mapping](.stuhelper/UPSTREAM.md)
+- [Contributor and release boundaries](AGENTS.md)
+- [Pinned upstream](.stuhelper/upstream.json) and [toolchains](.stuhelper/toolchains.json)
+- [CI](.github/workflows/ci.yml): standard GitHub-hosted Ubuntu runners, synthetic tests, full frontend checks and server build.
+- [Component publication](.github/workflows/release.yml): manual, protected, immutable image + Sigstore source provenance + SBOM. Production deployment remains in `StuHelper/StuHelper`.
+
+The original upstream documentation and Apache-2.0 notices follow.
+
+---
+
 <div align="center">
   <a href="https://casdoor.ai">
     <img src="https://cdn.casbin.org/img/casdoor-logo_1185x256.png" alt="Casdoor" width="500">
