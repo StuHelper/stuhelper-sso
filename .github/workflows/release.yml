@@ -1,0 +1,133 @@
+name: SSO Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      component_version:
+        description: Immutable component version, e.g. v4.20.0-stuhelper.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sso-component-publication
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and validate SSO component
+    if: github.repository == 'StuHelper/stuhelper-sso' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      COMPONENT_VERSION: ${{ inputs.component_version }}
+      GOFLAGS: -mod=readonly -p=4
+      GOMAXPROCS: "4"
+      GOMEMLIMIT: 6GiB
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.2
+          cache: true
+      - name: Initialize isolated build output
+        run: printf 'SSO_BUILD_OUTPUT=%s/sso-build\n' "${RUNNER_TEMP}" >>"${GITHUB_ENV}"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.11.1
+      - name: Install pinned package manager
+        run: npm install --global --ignore-scripts --no-audit --no-fund corepack@0.36.0 && corepack enable && corepack prepare yarn@1.22.22 --activate
+      - name: Validate, test and build the exact committed source
+        run: .stuhelper/build.sh
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the local candidate image
+        run: |
+          set -euo pipefail
+          metadata="${SSO_BUILD_OUTPUT}/release-input.json"
+          SOURCE_DATE_EPOCH="$(jq -r .sourceDateEpoch "${metadata}")" \
+          docker buildx build --load --platform linux/amd64 --tag sso-candidate:local \
+            --build-arg "SOURCE_DATE_EPOCH=$(jq -r .sourceDateEpoch "${metadata}")" \
+            --build-arg "SSO_SOURCE_COMMIT=$(jq -r .sourceCommit "${metadata}")" \
+            --build-arg "CASDOOR_UPSTREAM_COMMIT=$(jq -r .upstreamCommit "${metadata}")" \
+            --build-arg "CASDOOR_UPSTREAM_VERSION=$(jq -r .upstreamVersion "${metadata}")" \
+            --build-arg "CASDOOR_COMPONENT_VERSION=${COMPONENT_VERSION}" \
+            --build-arg "CASDOOR_DATABASE_MAJOR=$(jq -r .databaseMajor "${metadata}")" \
+            --build-arg "SSO_API_POLICY_SHA256=$(<"${SSO_BUILD_OUTPUT}/api-policy.sha256")" \
+            --build-arg "CASDOOR_RELEASE_INPUT_SHA256=$(jq -r .releaseInputSHA256 "${metadata}")" \
+            "${SSO_BUILD_OUTPUT}"
+      - name: Generate the required SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: docker:sso-candidate:local
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/sso-build/sbom.cdx.json
+          syft-version: v1.54.1
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Export validated image and metadata
+        run: docker save sso-candidate:local | gzip -1 >"${SSO_BUILD_OUTPUT}/image.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: validated-sso-image
+          path: |
+            ${{ runner.temp }}/sso-build/image.tar.gz
+            ${{ runner.temp }}/sso-build/release-input.json
+            ${{ runner.temp }}/sso-build/sbom.cdx.json
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Sign and publish validated SSO component
+    needs: build
+    if: github.repository == 'StuHelper/stuhelper-sso' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: sso-release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    env:
+      COMPONENT_VERSION: ${{ inputs.component_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Initialize isolated publication input
+        run: printf 'SSO_BUILD_OUTPUT=%s/sso-build\n' "${RUNNER_TEMP}" >>"${GITHUB_ENV}"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: validated-sso-image
+          path: ${{ runner.temp }}/sso-build
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Load the image without running candidate code
+        run: |
+          set -euo pipefail
+          gzip -dc "${SSO_BUILD_OUTPUT}/image.tar.gz" | docker load
+          test "$(docker image inspect sso-candidate:local --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${GITHUB_SHA}"
+          test "$(jq -r .sourceCommit "${SSO_BUILD_OUTPUT}/release-input.json")" = "${GITHUB_SHA}"
+      - name: Install pinned Cosign
+        run: .stuhelper/setup-cosign.sh
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish immutable image, source provenance, SBOM and release receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .stuhelper/publish.sh
+      - name: Retain the small release receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sso-release-receipt
+          path: ${{ runner.temp }}/sso-build/component.json
+          retention-days: 7

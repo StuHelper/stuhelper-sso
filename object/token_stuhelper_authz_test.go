@@ -66,7 +66,7 @@ func TestStuHelperBoundAuthorizationCodeAndRefreshFlow(t *testing.T) {
 
 	code, err := GetOAuthCode(
 		providerUserID, clientID, "", "password", "code", redirectURI,
-		"openid profile offline_access", "state", nonce, binding, "", "", "sso.example.test", "en",
+		"openid profile offline_access", "state", nonce, binding, "", "", "test-session", 1712345678, "sso.example.test", "en",
 	)
 	if err != nil || code == nil || code.Message != "" || code.Code == "" {
 		t.Fatalf("authorization code issuance = (%#v, %v)", code, err)
@@ -87,7 +87,7 @@ func TestStuHelperBoundAuthorizationCodeAndRefreshFlow(t *testing.T) {
 
 	changed, err := GetOAuthToken(
 		"refresh_token", clientID, clientSecret, "", "", "openid offline_access", "", "", "",
-		"sso.example.test", refreshed.RefreshToken, "", "", "en", "", "", "", "", "", "", "", "",
+		"", "sso.example.test", refreshed.RefreshToken, "", "", "en", "", "", "", "", "", "", "", "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestStuHelperBoundAuthorizationCodeAndRefreshFlow(t *testing.T) {
 
 	codeWithoutOffline, err := GetOAuthCode(
 		providerUserID, clientID, "", "password", "code", redirectURI,
-		"openid profile", "state", nonce, binding, "", "", "sso.example.test", "en",
+		"openid profile", "state", nonce, binding, "", "", "test-session", 1712345678, "sso.example.test", "en",
 	)
 	if err != nil || codeWithoutOffline == nil || codeWithoutOffline.Message != "" || codeWithoutOffline.Code == "" {
 		t.Fatalf("ordinary authorization code issuance = (%#v, %v)", codeWithoutOffline, err)
@@ -115,7 +115,7 @@ func TestStuHelperBoundAuthorizationCodeAndRefreshFlow(t *testing.T) {
 	}
 	unsupported, err := GetOAuthToken(
 		"refresh_token", clientID, clientSecret, "", "", "", "", "", "",
-		"sso.example.test", refreshed.RefreshToken, "", "", "en", "", "", "", "", "", "", "", "",
+		"", "sso.example.test", refreshed.RefreshToken, "", "", "en", "", "", "", "", "", "", "", "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func stuHelperOAuthTokenRequest(t *testing.T, grantType, clientID, clientSecret,
 	t.Helper()
 	result, err := GetOAuthToken(
 		grantType, clientID, clientSecret, code, "", scope, "", "", "",
-		"sso.example.test", refreshToken, "", "", "en", "", "", "", "", "", "", "", "",
+		"", "sso.example.test", refreshToken, "", "", "en", "", "", "", "", "", "", "", "", "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestRefreshAuthorizationStateRetainsOldBindingAndRejectsScopeChangeBeforeMi
 }
 
 func TestOAuthCodeRejectsOversizedStuHelperAuthorizationBinding(t *testing.T) {
-	_, err := GetOAuthCode("user", "client", "", "", "code", "https://client.example/callback", "openid", "state", "nonce", strings.Repeat("x", (16<<10)+1), "", "", "example.com", "en")
+	_, err := GetOAuthCode("user", "client", "", "", "code", "https://client.example/callback", "openid", "state", "nonce", strings.Repeat("x", (16<<10)+1), "", "", "test-session", 1712345678, "example.com", "en")
 	if err == nil {
 		t.Fatal("expected oversized stuhelper authorization binding to be rejected")
 	}

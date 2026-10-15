@@ -15,8 +15,10 @@
 package object
 
 import (
+	"github.com/golang-jwt/jwt/v5"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestNewMFAAuthenticationContext(t *testing.T) {
@@ -80,9 +82,9 @@ func TestJWTProjectionsOmitMFAClaimsWithoutVerifiedContext(t *testing.T) {
 		authTime int64
 		acr      string
 	}{
-		"short":             {short.AMR, short.AuthTime, short.ACR},
-		"without third idp": {withoutThirdIDP.AMR, withoutThirdIDP.AuthTime, withoutThirdIDP.ACR},
-		"standard":          {standard.AMR, standard.AuthTime, standard.ACR},
+		"short":             {short.AMR, authenticationTimeUnix(short.AuthTime), short.ACR},
+		"without third idp": {withoutThirdIDP.AMR, authenticationTimeUnix(withoutThirdIDP.AuthTime), withoutThirdIDP.ACR},
+		"standard":          {standard.AMR, authenticationTimeUnix(standard.AuthTime), standard.ACR},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if len(projection.amr) != 0 || projection.authTime != 0 || projection.acr != "" {
@@ -99,10 +101,10 @@ func TestJWTProjectionsOmitMFAClaimsWithoutVerifiedContext(t *testing.T) {
 
 func TestMFAClaimsSurviveEveryJWTProjection(t *testing.T) {
 	claims := Claims{
-		User:     &User{Owner: "example", Name: "alice", Id: "subject-1"},
-		AMR:      []string{"pwd", "mfa", "totp"},
-		AuthTime: 1712345678,
-		ACR:      "mfa",
+		User:              &User{Owner: "example", Name: "alice", Id: "subject-1"},
+		AMR:               []string{"pwd", "mfa", "totp"},
+		OidcIdTokenClaims: OidcIdTokenClaims{AuthTime: jwt.NewNumericDate(time.Unix(1712345678, 0))},
+		ACR:               "mfa",
 	}
 
 	short := getShortClaims(claims)
@@ -115,12 +117,12 @@ func TestMFAClaimsSurviveEveryJWTProjection(t *testing.T) {
 		authTime int64
 		acr      string
 	}{
-		"short":             {short.AMR, short.AuthTime, short.ACR},
-		"without third idp": {withoutThirdIDP.AMR, withoutThirdIDP.AuthTime, withoutThirdIDP.ACR},
-		"standard":          {standard.AMR, standard.AuthTime, standard.ACR},
+		"short":             {short.AMR, authenticationTimeUnix(short.AuthTime), short.ACR},
+		"without third idp": {withoutThirdIDP.AMR, authenticationTimeUnix(withoutThirdIDP.AuthTime), withoutThirdIDP.ACR},
+		"standard":          {standard.AMR, authenticationTimeUnix(standard.AuthTime), standard.ACR},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if !reflect.DeepEqual(projection.amr, claims.AMR) || projection.authTime != claims.AuthTime || projection.acr != claims.ACR {
+			if !reflect.DeepEqual(projection.amr, claims.AMR) || projection.authTime != authenticationTimeUnix(claims.AuthTime) || projection.acr != claims.ACR {
 				t.Fatalf("MFA claims were dropped: %#v", projection)
 			}
 		})

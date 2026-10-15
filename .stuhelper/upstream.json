@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/casdoor/casdoor",
+  "version": "v4.20.0",
+  "commit": "ef7754b1a55e473b9622422bad6a266b7a06b277",
+  "verifiedAt": "2026-10-15",
+  "legacyBaseline": "2fc5a7f0fb3578a8be63f65ebdd409d0fd795d0d",
+  "maintenance": "merge the pinned stable upstream commit, then review every difference against that upstream tree",
+  "databaseMajor": 4,
+  "rollbackPolicy": "restore the pre-upgrade database backup before reverting across a major version"
+}
