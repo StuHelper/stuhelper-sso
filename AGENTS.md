@@ -12,8 +12,10 @@ owned by `StuHelper/StuHelper`; this repository receives no production credentia
   use equivalent upstream implementations where available. `web-old/` remains upstream archival source.
 - `develop -> main` release PRs use merge commits. No direct push to either long-lived
   branch after the initial repository bootstrap. No force pushes or moving release tags.
-- A release is `v<upstream>-stuhelper.<revision>`. Publishing an image or release requires
-  owner authorization and the protected `sso-release` environment. Ordinary CI only builds/tests.
+- A release is `v<upstream>-stuhelper.<revision>`. The owner has authorized automatic
+  stable upstream updates, including major versions, through the tested PR and protected
+  `sso-release` pipeline. Ordinary CI only builds/tests. The main consumer must complete
+  migration and backup restoration rehearsal before every automatic production upgrade.
 - Keep Casdoor the identity/session authority; the target organization user's `IsAdmin`
   remains the only source for StuHelper `super_admin`. Never authorize from arbitrary provider roles.
 - Preserve opaque OIDC nonce/state, separate `stuhelper_authz`, server-verified MFA context,

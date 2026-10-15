@@ -42,3 +42,25 @@ before the first authorized publication. Only the main deployer updates `compone
 Public source/CI uses GitHub-hosted runners. GitHub environments and branch/tag
 protection are configured separately from the YAML; the release workflow alone is
 not evidence that an environment reviewer has been configured.
+
+## Automatic stable updates
+
+The owner approved all stable upstream versions, including major releases, on
+2026-10-15. `upstream.yml` checks every six hours and resumes when CI/release runs
+complete. It uses the repository token with explicit workflow dispatch, so it
+needs no cross-repository PAT or paid coding-agent API. Conflicts and failed
+compatibility checks produce an idempotent issue and retain the candidate for
+manual repair; pushing the repair lets the controller resume.
+
+The controller preserves `.github/`, `.stuhelper/`, `AGENTS.md` and the Node pin
+from the trusted branch before committing an upstream merge. It never runs
+upstream source with a write token. Required CI passes on the exact PR head;
+branch protections also apply to the merge API. Upstream and release PRs use
+merge commits, and release ancestry is merged back into develop through a PR.
+
+Release builds and tests run with read-only permissions. A separate protected job
+loads the validated OCI archive without running it, signs source provenance and
+SBOM, and publishes the immutable version. It never receives production secrets.
+The main repository discovers the public release, independently verifies the
+exact publisher, approves the digest, and enforces database rehearsal on the
+production host before switching the service. Publication alone is not deployment.
